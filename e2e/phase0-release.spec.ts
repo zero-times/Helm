@@ -107,9 +107,9 @@ test.describe.serial("Phase 0 release acceptance", () => {
     );
 
     await page.goto("/releases");
-    const releaseCard = page.locator("article.release-card", {
-      hasText: "Release the Phase 0 lifecycle",
-    });
+    const releaseCard = page.locator(
+      `article.release-card[data-release-id="${fixture.requirementId}"]`,
+    );
     await expect(releaseCard.getByText("1 个阻塞 Bug")).toBeVisible();
     await expect(releaseCard.getByRole("button", { name: "明确授权发布" })).toBeDisabled();
 

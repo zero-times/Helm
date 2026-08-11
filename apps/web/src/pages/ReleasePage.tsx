@@ -47,7 +47,7 @@ function ReleaseCard({
   }
 
   return (
-    <article className="release-card">
+    <article className="release-card" data-release-id={release.id}>
       <header className="release-head">
         <div className="release-title-lockup"><span><PackageCheck aria-hidden="true" size={24} /></span><div><p className="eyebrow">Next release</p><h2>{release.name}</h2></div></div>
         <div className="release-head-meta"><StatusPill status={release.status} /><time dateTime={release.targetAt}><FileClock aria-hidden="true" size={15} />目标 {formatDate(release.targetAt)}</time></div>
