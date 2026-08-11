@@ -22,6 +22,20 @@
       "when": 1786420196519,
       "tag": "0002_dizzy_major_mapleleaf",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786423866111,
+      "tag": "0003_curly_kree",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786425076957,
+      "tag": "0004_lame_cerise",
+      "breakpoints": true
     }
   ]
 }

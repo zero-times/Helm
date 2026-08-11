@@ -84,13 +84,13 @@ export interface ArtifactReferenceInput {
   readonly kind: ArtifactKind;
   readonly name: string;
   readonly uri: string;
-  readonly mediaType?: string;
+  readonly mediaType?: string | undefined;
   readonly digest?: {
     readonly algorithm: "sha256";
     readonly value: string;
-  };
-  readonly sizeBytes?: number;
-  readonly metadata?: Readonly<Record<string, JsonValue>>;
+  } | undefined;
+  readonly sizeBytes?: number | undefined;
+  readonly metadata?: Readonly<Record<string, JsonValue>> | undefined;
 }
 
 export interface ArtifactReference {
@@ -111,9 +111,9 @@ export interface TestResultReferenceInput {
   readonly id: string;
   readonly name: string;
   readonly status: TestStatus;
-  readonly command?: string;
-  readonly details?: string;
-  readonly artifactIds?: readonly string[];
+  readonly command?: string | undefined;
+  readonly details?: string | undefined;
+  readonly artifactIds?: readonly string[] | undefined;
 }
 
 export interface TestResultReference {
@@ -144,7 +144,7 @@ export interface KnownIssue {
 export interface HumanDecisionInput {
   readonly question: string;
   readonly context: string;
-  readonly options?: readonly string[];
+  readonly options?: readonly string[] | undefined;
 }
 
 export interface HumanDecision {
@@ -156,8 +156,8 @@ export interface HumanDecision {
 export interface SessionReferenceInput {
   readonly provider: string;
   readonly externalSessionId: string;
-  readonly machineId?: string;
-  readonly workspacePath?: string;
+  readonly machineId?: string | undefined;
+  readonly workspacePath?: string | undefined;
 }
 
 export interface SessionReference {
@@ -180,17 +180,17 @@ export interface Money {
 export interface ResultContractInput {
   readonly id: string;
   readonly summary: string;
-  readonly changedFiles?: readonly string[];
-  readonly changeSet?: ChangeSetReference;
-  readonly commitReference?: string;
-  readonly tests?: readonly TestResultReferenceInput[];
-  readonly artifacts?: readonly ArtifactReferenceInput[];
-  readonly knownIssues?: readonly KnownIssueInput[];
-  readonly needsHumanDecision?: boolean;
-  readonly humanDecision?: HumanDecisionInput;
-  readonly sessionReference?: SessionReferenceInput;
-  readonly actualCost?: MoneyInput;
-  readonly durationMs?: number;
+  readonly changedFiles?: readonly string[] | undefined;
+  readonly changeSet?: ChangeSetReference | undefined;
+  readonly commitReference?: string | undefined;
+  readonly tests?: readonly TestResultReferenceInput[] | undefined;
+  readonly artifacts?: readonly ArtifactReferenceInput[] | undefined;
+  readonly knownIssues?: readonly KnownIssueInput[] | undefined;
+  readonly needsHumanDecision?: boolean | undefined;
+  readonly humanDecision?: HumanDecisionInput | undefined;
+  readonly sessionReference?: SessionReferenceInput | undefined;
+  readonly actualCost?: MoneyInput | undefined;
+  readonly durationMs?: number | undefined;
   readonly verificationSource: VerificationSource;
 }
 
@@ -220,7 +220,7 @@ export interface FinishManualExecutionInput {
   readonly expectedVersion: number;
   readonly outcome: TerminalExecutionStatus;
   readonly endedAt: string | Date;
-  readonly endReason?: string;
+  readonly endReason?: string | undefined;
   readonly result: ResultContractInput;
 }
 
