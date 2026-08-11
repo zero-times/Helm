@@ -52,6 +52,7 @@ import { projectRoutes } from './routes/projects';
 import { requirementRoutes } from './routes/requirements';
 import { reviewRoutes } from './routes/reviews';
 import { roleAssignmentRoutes } from './routes/role-assignments';
+import { uiActionRoutes } from './routes/ui-actions';
 import { workGraphRoutes } from './routes/work-graphs';
 
 export interface BuildAppOptions {
@@ -87,6 +88,7 @@ export function buildApp(options: BuildAppOptions) {
   void server.register(executionRoutes, { database: options.database });
   void server.register(reviewRoutes, { database: options.database });
   void server.register(bugRoutes, { database: options.database });
+  void server.register(uiActionRoutes, { database: options.database });
 
   server.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'Request failed');

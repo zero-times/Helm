@@ -99,6 +99,7 @@ describe('Bug WorkItem, QA return, and Release Gate API', () => {
         await server.inject({
           method: 'POST',
           url: `/api/work-items/${workItemId}/transition`,
+          headers: { 'if-match': '1' },
           payload: { toStatus: 'in_progress', expectedGraphVersion: graph.graphVersion },
         })
       ).statusCode,
@@ -233,6 +234,7 @@ describe('Bug WorkItem, QA return, and Release Gate API', () => {
         await server.inject({
           method: 'POST',
           url: `/api/work-items/${workItemId}/transition`,
+          headers: { 'if-match': '2' },
           payload: { toStatus: 'completed', expectedGraphVersion: graph.graphVersion },
         })
       ).statusCode,
@@ -248,5 +250,33 @@ describe('Bug WorkItem, QA return, and Release Gate API', () => {
     });
     expect(openGate.statusCode).toBe(200);
     expect(openGate.json()).toEqual({ requirementId: requirement.id, releasable: true });
+
+    const comment = await server.inject({
+      method: 'POST',
+      url: `/api/v1/work-items/${workItemId}/comments`,
+      headers: { 'if-match': '3', 'idempotency-key': `comment-${suffix}` },
+      payload: { body: 'Release evidence reviewed.' },
+    });
+    expect(comment.statusCode).toBe(200);
+
+    const authorization = await server.inject({
+      method: 'POST',
+      url: `/api/v1/releases/${requirement.id}/gate`,
+      headers: { 'idempotency-key': `release-${suffix}` },
+      payload: { decision: 'approve', note: 'All required evidence accepted.' },
+    });
+    expect(authorization.statusCode).toBe(200);
+    expect(authorization.json()).toMatchObject({
+      requirementId: requirement.id,
+      status: 'approved',
+    });
+
+    const audit = await server.inject({
+      method: 'GET',
+      url: `/api/v1/domain-events?organizationId=${organization.id}`,
+    });
+    expect(
+      audit.json<{ events: Array<{ eventType: string }> }>().events.map((event) => event.eventType),
+    ).toEqual(expect.arrayContaining(['WorkItem.CommentAdded', 'Release.Authorized']));
   });
 });
