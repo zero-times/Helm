@@ -92,8 +92,12 @@ export interface StartBugFixInput {
 
 export interface PassedReviewGateInput {
   readonly gateId: string;
-  readonly workItemId: string;
+  readonly bugId: string;
+  readonly sourceRequirementId: string;
   readonly graphVersion: number;
+  readonly executionId: string;
+  readonly resultId: string;
+  readonly reviewId: string;
 }
 
 /** Adapter port implemented by HELM-5's HumanGatePolicy. */

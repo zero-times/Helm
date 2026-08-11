@@ -47,6 +47,9 @@ importers:
       '@helm/audit-events':
         specifier: workspace:*
         version: link:../../packages/audit-events
+      '@helm/bug-qa':
+        specifier: workspace:*
+        version: link:../../packages/bug-qa
       '@helm/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -144,6 +147,13 @@ importers:
         version: 7.0.2
 
   packages/bug-qa:
+    dependencies:
+      '@helm/database':
+        specifier: workspace:*
+        version: link:../database
+      '@helm/review':
+        specifier: workspace:*
+        version: link:../review
     devDependencies:
       typescript:
         specifier: 5.9.2

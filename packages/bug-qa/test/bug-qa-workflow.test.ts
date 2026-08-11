@@ -114,8 +114,12 @@ describe("Bug WorkItem and QA return workflow", () => {
 
     assert.deepEqual(checkedGate, {
       gateId: GATE_ID,
-      workItemId: BUG_ID,
+      bugId: BUG_ID,
+      sourceRequirementId: REQUIREMENT_ID,
       graphVersion: 3,
+      executionId: EXECUTION_ID,
+      resultId: RESULT_ID,
+      reviewId: REVIEW_ID,
     });
     assert.equal(submitted.bug.status, "awaiting_qa");
     assert.equal(submitted.regression.status, "pending");

@@ -12,6 +12,15 @@ export {
   workItemStatusEnum,
 } from './work-graph';
 export {
+  bugDiscoveryStageEnum,
+  bugFixEdges,
+  bugSeverityEnum,
+  bugStatusEnum,
+  bugWorkItems,
+  qaRegressionEdges,
+  qaRegressionStatusEnum,
+} from './bug-qa';
+export {
   artifactKindEnum,
   executionResults,
   executionTestResults,
