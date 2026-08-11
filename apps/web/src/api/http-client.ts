@@ -89,4 +89,3 @@ export class HttpHelmClient implements HelmClient {
     return (await response.json()) as T;
   }
 }
-

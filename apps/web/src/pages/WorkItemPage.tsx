@@ -273,4 +273,3 @@ function timelineIcon(type: TimelineEvent["type"]) {
 function splitLines(value: string): string[] {
   return value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean);
 }
-

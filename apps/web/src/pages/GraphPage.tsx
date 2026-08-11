@@ -75,4 +75,3 @@ function GraphNotFound() {
     <section className="empty-state"><GitBranch aria-hidden="true" size={28} /><h1>这项需求还没有工作图</h1><p>先为需求添加最小节点和依赖，再开始执行。</p><Link className="button button--primary" to="/projects">返回项目</Link></section>
   );
 }
-

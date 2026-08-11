@@ -217,4 +217,3 @@ export interface LiveEvent {
   occurredAt: string;
   entityId?: string;
 }
-

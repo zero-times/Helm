@@ -34,4 +34,3 @@ export function createHelmClient(): HelmClient {
     ? new MockHelmClient()
     : new HttpHelmClient(import.meta.env.VITE_API_BASE_URL || "");
 }
-

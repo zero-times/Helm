@@ -50,4 +50,3 @@ describe("Helm management dashboard", () => {
     expect(screen.getByRole("button", { name: "明确授权发布" })).toBeEnabled();
   });
 });
-

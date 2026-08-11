@@ -103,4 +103,3 @@ export function formatDate(value: string, options?: Intl.DateTimeFormatOptions) 
     new Date(value),
   );
 }
-

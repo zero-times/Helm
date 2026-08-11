@@ -300,4 +300,3 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
     generatedAt: now,
   } satisfies WorkspaceSnapshot);
 }
-

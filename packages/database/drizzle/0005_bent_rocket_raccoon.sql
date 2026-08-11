@@ -1,0 +1,1 @@
+ALTER TABLE "work_items" ADD COLUMN "entity_version" integer DEFAULT 1 NOT NULL;

@@ -1,12 +1,49 @@
 {
   "name": "helm",
+  "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
   "scripts": {
-    "dev": "pnpm --filter @helm/web dev",
-    "build": "pnpm --filter @helm/web build",
-    "test": "pnpm --filter @helm/web test",
-    "typecheck": "pnpm --filter @helm/web typecheck"
+    "dev": "pnpm infra:up && pnpm db:migrate && concurrently --kill-others-on-fail --names server,web --prefix-colors blue,magenta \"pnpm --filter @helm/server dev\" \"pnpm --filter @helm/web dev\"",
+    "dev:apps": "concurrently --kill-others-on-fail --names server,web --prefix-colors blue,magenta \"pnpm --filter @helm/server dev\" \"pnpm --filter @helm/web dev\"",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --if-present typecheck",
+    "lint": "eslint .",
+    "test": "pnpm test:unit && pnpm test:integration && pnpm test:packages",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:packages": "pnpm --filter './packages/**' --if-present test",
+    "test:e2e": "playwright test",
+    "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "db:generate": "pnpm --filter @helm/database db:generate",
+    "db:check": "pnpm --filter @helm/database db:check",
+    "db:migrate": "pnpm --filter @helm/database db:migrate",
+    "db:migrate:twice": "pnpm db:migrate && pnpm db:migrate",
+    "infra:up": "docker compose up -d --wait postgres",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down --volumes"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "concurrently": "^10.0.4",
+    "eslint": "^10.8.1",
+    "globals": "^17.9.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
-

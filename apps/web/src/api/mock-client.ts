@@ -220,4 +220,3 @@ export class MockHelmClient implements HelmClient {
     void event;
   }
 }
-
