@@ -1,0 +1,1 @@
+export { systemMetadata } from './system';
