@@ -13,7 +13,10 @@ import { PostgresReviewRepository } from '@helm/review/postgres';
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 
-import { executeAuditedCommand } from '../audited-command';
+import {
+  executeAuditedCommand,
+  type AuditedMutationEvent,
+} from '../audited-command';
 
 const uuidParams = z.object({ id: z.string().uuid() });
 const createGraphBody = z.object({
@@ -352,6 +355,7 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
         }
 
         const canceledDescendantWorkItemIds: string[] = [];
+        const additionalEvents: AuditedMutationEvent[] = [];
         if (body.toStatus === WorkItemStatus.Canceled) {
           const graphNodes = await tx
             .select({
@@ -425,6 +429,24 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
               );
             }
             canceledDescendantWorkItemIds.push(canceled.id);
+            additionalEvents.push({
+              entityType: 'work_item',
+              entityId: canceled.id,
+              entityVersion: descendant.entityVersion + 1,
+              eventType: 'WorkItem.StateChanged',
+              workItemId: canceled.id,
+              graphVersion: item.graphVersion,
+              category: 'state_change',
+              summary: 'Work item canceled by upstream propagation',
+              payload: {
+                toStatus: WorkItemStatus.Canceled,
+                propagatedFromWorkItemId: id,
+              },
+              details: {
+                toStatus: WorkItemStatus.Canceled,
+                propagatedFromWorkItemId: id,
+              },
+            });
           }
         }
         return {
@@ -435,6 +457,7 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
             canceledDescendantWorkItemIds,
           },
           entityVersion: updated.entityVersion,
+          additionalEvents,
         };
       },
     });

@@ -33,7 +33,7 @@ Use `pnpm infra:reset` only for a disposable local E2E database. It removes the 
 | Blocking Bug release gate | A critical blocking Bug disables release authorization until its reviewed fix passes QA regression. |
 | Idempotency | Replaying a comment command with the same key returns the original response and creates one audit event. |
 | Optimistic concurrency | A stale `If-Match` write returns `409 OPTIMISTIC_CONCURRENCY_CONFLICT`. |
-| Cancellation propagation | Canceling an upstream node cancels all reachable unfinished nodes connected by hard dependencies, skips already-canceled descendants, leaves soft-edge branches untouched, and derives the Requirement as canceled. Covered by `apps/server/test/work-graph.integration.test.ts` and the E2E. |
+| Cancellation propagation | Canceling an upstream node cancels all reachable unfinished nodes connected by hard dependencies, skips already-canceled descendants, leaves soft-edge branches untouched, and derives the Requirement as canceled. Every propagated cancellation writes its own domain event, Timeline entry, entity version, and outbox message; idempotent replay does not duplicate them. Covered by `apps/server/test/work-graph.integration.test.ts` and the E2E. |
 | Reproducible report | This document records the commands, covered paths, release gate, rollback, and known risks. |
 
 ## Release checklist

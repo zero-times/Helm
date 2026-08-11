@@ -12,6 +12,22 @@ import { sql, type Database } from '@helm/database';
 
 type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
+export interface AuditedMutationEvent {
+  entityType: string;
+  entityId: string;
+  entityVersion: number;
+  eventType: string;
+  workItemId?: string;
+  executionId?: string;
+  graphVersion?: number;
+  category: string;
+  summary: string;
+  payload?: JsonValue;
+  details?: JsonObject;
+  importance?: TimelineImportance;
+  outboxTopic?: string;
+}
+
 export interface AuditedCommand<TResult extends JsonValue> {
   organizationId: string;
   commandType: string;
@@ -33,6 +49,7 @@ export interface AuditedCommand<TResult extends JsonValue> {
   mutate: (transaction: DatabaseTransaction) => Promise<{
     result: TResult;
     entityVersion: number;
+    additionalEvents?: readonly AuditedMutationEvent[];
   }>;
 }
 
@@ -88,57 +105,78 @@ export async function executeAuditedCommand<TResult extends JsonValue>(
 
     const mutation = await command.mutate(transaction);
     const occurredAt = new Date().toISOString();
-    const eventId = randomUUID();
-    const timelineEventId = randomUUID();
-    const messageId = randomUUID();
-    const payloadJson = JSON.stringify(command.payload);
-    const detailsJson = JSON.stringify(command.details ?? {});
     const resultJson = JSON.stringify(mutation.result);
+    const events: readonly AuditedMutationEvent[] = [
+      {
+        entityType: command.entityType,
+        entityId: command.entityId,
+        entityVersion: mutation.entityVersion,
+        eventType: command.eventType,
+        ...(command.workItemId ? { workItemId: command.workItemId } : {}),
+        ...(command.executionId ? { executionId: command.executionId } : {}),
+        ...(command.graphVersion ? { graphVersion: command.graphVersion } : {}),
+        category: command.category,
+        summary: command.summary,
+        payload: command.payload,
+        details: command.details ?? {},
+        ...(command.importance ? { importance: command.importance } : {}),
+        ...(command.outboxTopic ? { outboxTopic: command.outboxTopic } : {}),
+      },
+      ...(mutation.additionalEvents ?? []),
+    ];
 
-    await transaction.execute(sql`
-      INSERT INTO entity_versions (
-        organization_id, entity_type, entity_id, entity_version, updated_at
-      ) VALUES (
-        ${command.organizationId}, ${command.entityType}, ${command.entityId},
-        ${mutation.entityVersion}, ${occurredAt}
-      )
-      ON CONFLICT (organization_id, entity_type, entity_id)
-      DO UPDATE SET entity_version = EXCLUDED.entity_version, updated_at = EXCLUDED.updated_at
-    `);
-    await transaction.execute(sql`
-      INSERT INTO domain_events (
-        event_id, event_type, organization_id, entity_type, entity_id,
-        work_item_id, execution_id, actor_member_id, source, graph_version,
-        entity_version, idempotency_key, occurred_at, payload
-      ) VALUES (
-        ${eventId}, ${command.eventType}, ${command.organizationId},
-        ${command.entityType}, ${command.entityId}, ${command.workItemId ?? null},
-        ${command.executionId ?? null}, ${command.actorMemberId}, ${command.source},
-        ${command.graphVersion ?? null}, ${mutation.entityVersion},
-        ${command.idempotencyKey}, ${occurredAt}, ${payloadJson}::jsonb
-      )
-    `);
-    await transaction.execute(sql`
-      INSERT INTO timeline_events (
-        timeline_event_id, domain_event_id, organization_id, entity_type, entity_id,
-        work_item_id, execution_id, category, summary, details, importance,
-        actor_member_id, source, entity_version, occurred_at
-      ) VALUES (
-        ${timelineEventId}, ${eventId}, ${command.organizationId},
-        ${command.entityType}, ${command.entityId}, ${command.workItemId ?? null},
-        ${command.executionId ?? null}, ${command.category}, ${command.summary},
-        ${detailsJson}::jsonb, ${command.importance ?? 'normal'},
-        ${command.actorMemberId}, ${command.source}, ${mutation.entityVersion}, ${occurredAt}
-      )
-    `);
-    await transaction.execute(sql`
-      INSERT INTO outbox_messages (
-        message_id, domain_event_id, topic, payload, created_at
-      ) VALUES (
-        ${messageId}, ${eventId}, ${command.outboxTopic ?? command.eventType},
-        ${payloadJson}::jsonb, ${occurredAt}
-      )
-    `);
+    for (const event of events) {
+      const eventId = randomUUID();
+      const timelineEventId = randomUUID();
+      const messageId = randomUUID();
+      const payloadJson = JSON.stringify(event.payload ?? {});
+      const detailsJson = JSON.stringify(event.details ?? {});
+
+      await transaction.execute(sql`
+        INSERT INTO entity_versions (
+          organization_id, entity_type, entity_id, entity_version, updated_at
+        ) VALUES (
+          ${command.organizationId}, ${event.entityType}, ${event.entityId},
+          ${event.entityVersion}, ${occurredAt}
+        )
+        ON CONFLICT (organization_id, entity_type, entity_id)
+        DO UPDATE SET entity_version = EXCLUDED.entity_version, updated_at = EXCLUDED.updated_at
+      `);
+      await transaction.execute(sql`
+        INSERT INTO domain_events (
+          event_id, event_type, organization_id, entity_type, entity_id,
+          work_item_id, execution_id, actor_member_id, source, graph_version,
+          entity_version, idempotency_key, occurred_at, payload
+        ) VALUES (
+          ${eventId}, ${event.eventType}, ${command.organizationId},
+          ${event.entityType}, ${event.entityId}, ${event.workItemId ?? null},
+          ${event.executionId ?? null}, ${command.actorMemberId}, ${command.source},
+          ${event.graphVersion ?? null}, ${event.entityVersion},
+          ${command.idempotencyKey}, ${occurredAt}, ${payloadJson}::jsonb
+        )
+      `);
+      await transaction.execute(sql`
+        INSERT INTO timeline_events (
+          timeline_event_id, domain_event_id, organization_id, entity_type, entity_id,
+          work_item_id, execution_id, category, summary, details, importance,
+          actor_member_id, source, entity_version, occurred_at
+        ) VALUES (
+          ${timelineEventId}, ${eventId}, ${command.organizationId},
+          ${event.entityType}, ${event.entityId}, ${event.workItemId ?? null},
+          ${event.executionId ?? null}, ${event.category}, ${event.summary},
+          ${detailsJson}::jsonb, ${event.importance ?? 'normal'},
+          ${command.actorMemberId}, ${command.source}, ${event.entityVersion}, ${occurredAt}
+        )
+      `);
+      await transaction.execute(sql`
+        INSERT INTO outbox_messages (
+          message_id, domain_event_id, topic, payload, created_at
+        ) VALUES (
+          ${messageId}, ${eventId}, ${event.outboxTopic ?? event.eventType},
+          ${payloadJson}::jsonb, ${occurredAt}
+        )
+      `);
+    }
     await transaction.execute(sql`
       UPDATE idempotency_keys
       SET status = 'completed', result_json = ${resultJson}::jsonb, completed_at = ${occurredAt}

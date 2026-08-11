@@ -350,6 +350,57 @@ describe('cancellation propagation', () => {
     );
     expect(canceledBody.canceledDescendantWorkItemIds).not.toContain(extra.workItemId);
 
+    const replayed = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${plan.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `cancel-plan-${suffix}`,
+        'if-match': String(plan.entityVersion + 1),
+      },
+      payload: { toStatus: 'canceled', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(replayed.statusCode, replayed.body).toBe(200);
+    expect(replayed.json()).toEqual(canceledBody);
+
+    for (const descendant of [build, release]) {
+      const eventsResponse = await server.inject({
+        method: 'GET',
+        url: `/api/v1/domain-events?organizationId=${organizationId}&workItemId=${descendant.workItemId}`,
+      });
+      expect(eventsResponse.statusCode, eventsResponse.body).toBe(200);
+      expect(eventsResponse.json<{
+        events: Array<{
+          eventType: string;
+          entityId: string;
+          entityVersion: number;
+          payload: Record<string, unknown>;
+        }>;
+      }>().events).toEqual([expect.objectContaining({
+        eventType: 'WorkItem.StateChanged',
+        entityId: descendant.workItemId,
+        entityVersion: descendant.entityVersion + 1,
+        payload: {
+          toStatus: 'canceled',
+          propagatedFromWorkItemId: plan.workItemId,
+        },
+      })]);
+
+      const timelineResponse = await server.inject({
+        method: 'GET',
+        url: `/api/v1/timeline?organizationId=${organizationId}&workItemId=${descendant.workItemId}`,
+      });
+      expect(timelineResponse.statusCode, timelineResponse.body).toBe(200);
+      expect(timelineResponse.json<{
+        events: Array<{ summary: string; details: Record<string, unknown> }>;
+      }>().events).toEqual([expect.objectContaining({
+        summary: 'Work item canceled by upstream propagation',
+        details: {
+          toStatus: 'canceled',
+          propagatedFromWorkItemId: plan.workItemId,
+        },
+      })]);
+    }
+
     const finalGraphResponse = await server.inject({
       method: 'GET',
       url: `/api/requirements/${requirement.id}/work-graph`,
