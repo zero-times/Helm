@@ -16,7 +16,7 @@ function canonicalize(value: unknown, path: string, seen: Set<object>): string {
       }
       return JSON.stringify(value);
     case "object": {
-      const object = value as object;
+      const object = value;
       if (seen.has(object)) {
         throw new InvalidAuditInputError(`${path} must not contain circular references.`);
       }
@@ -28,7 +28,7 @@ function canonicalize(value: unknown, path: string, seen: Set<object>): string {
           .map((item, index) => canonicalize(item, `${path}[${index}]`, seen))
           .join(",")}]`;
       } else {
-        const prototype = Object.getPrototypeOf(value);
+        const prototype = Reflect.getPrototypeOf(value);
         if (prototype !== Object.prototype && prototype !== null) {
           throw new InvalidAuditInputError(`${path} must contain only JSON objects.`);
         }

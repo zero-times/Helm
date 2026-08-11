@@ -65,6 +65,22 @@ export default tseslint.config(
     files: ['**/*.config.ts', '**/*.test.ts', 'e2e/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-assignment': 'off',
+      // node:test's top-level test/describe registration may be typed as a
+      // promise even though registration is intentionally not awaited.
+      '@typescript-eslint/no-floating-promises': 'off',
+    },
+  },
+  {
+    // These classes are deliberately synchronous in-memory implementations
+    // of asynchronous persistence contracts used by production adapters.
+    files: [
+      'packages/audit-events/src/store.ts',
+      'packages/bug-qa/src/repository.ts',
+      'packages/execution/src/repository.ts',
+      'packages/review/src/repository.ts',
+    ],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
     },
   },
 );
