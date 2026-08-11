@@ -258,7 +258,7 @@ function ExecutionHistory({ item }: { item: WorkItem }) {
 }
 
 function WorkItemNotFound() {
-  return <section className="empty-state"><FileCheck2 aria-hidden="true" size={30} /><h1>没有找到这个任务</h1><p>它可能已被取消，或不属于当前工作区。</p><Link className="button button--primary" to="/requirements/req-42/graph">返回工作图</Link></section>;
+  return <section className="empty-state"><FileCheck2 aria-hidden="true" size={30} /><h1>没有找到这个任务</h1><p>它可能已被取消，或不属于当前工作区。</p><Link className="button button--primary" to="/projects">返回项目</Link></section>;
 }
 
 function timelineIcon(type: TimelineEvent["type"]) {

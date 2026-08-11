@@ -43,6 +43,10 @@ export interface Project {
   key: string;
   name: string;
   goal: string;
+  slug: string;
+  description: string;
+  accountableHuman?: PersonRef;
+  operationalOwner?: PersonRef;
   activeRequirementCount: number;
   attentionCount: number;
   progress: number;
@@ -59,7 +63,11 @@ export interface Requirement {
   progress: number;
   requiredCompleted: number;
   requiredTotal: number;
+  accountableHuman: PersonRef;
+  operationalOwner: PersonRef;
+  assignee: PersonRef;
   owner: PersonRef;
+  acceptanceCriteria: string[];
   updatedAt: string;
 }
 
@@ -131,6 +139,7 @@ export interface TimelineEvent {
   title: string;
   summary: string;
   actor: PersonRef;
+  workItemId?: string;
   occurredAt: string;
   entityVersion: number;
   rawLog?: string;
@@ -178,11 +187,14 @@ export interface AttentionItem {
   detail: string;
   targetLabel: string;
   href: string;
+  workItemId?: string;
+  requirementIds?: string[];
 }
 
 export interface WorkspaceSnapshot {
   organizationName: string;
   mode: "phase_0";
+  members: PersonRef[];
   projects: Project[];
   requirements: Requirement[];
   graphs: WorkGraph[];
@@ -216,4 +228,54 @@ export interface LiveEvent {
   type: "workspace.updated" | "heartbeat";
   occurredAt: string;
   entityId?: string;
+}
+
+export interface CreateRequirementInput {
+  projectId: string;
+  goal: string;
+  acceptanceCriteria: string[];
+  accountableHumanId: string;
+  operationalOwnerId: string;
+  assigneeMemberId: string;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  slug: string;
+  description: string;
+  accountableHumanId: string;
+  operationalOwnerId: string;
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  slug?: string;
+  description?: string;
+  accountableHumanId?: string;
+  operationalOwnerId?: string;
+}
+
+export interface UpdateRequirementInput {
+  goal?: string;
+  acceptanceCriteria?: string[];
+  accountableHumanId?: string;
+  operationalOwnerId?: string;
+  assigneeMemberId?: string;
+}
+
+export interface CreateWorkGraphNodeInput {
+  key: string;
+  title: string;
+  isRequired: boolean;
+}
+
+export interface CreateWorkGraphEdgeInput {
+  sourceKey: string;
+  targetKey: string;
+  isHardDependency: boolean;
+}
+
+export interface CreateWorkGraphInput {
+  nodes: CreateWorkGraphNodeInput[];
+  edges: CreateWorkGraphEdgeInput[];
 }

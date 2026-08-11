@@ -6,20 +6,31 @@ import {
   Radio,
   RefreshCw,
   ShieldCheck,
+  Users,
   X,
 } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useHelm } from "../state/helm-context";
 
-const navigation = [
-  { to: "/", label: "今日", icon: Gauge, end: true },
-  { to: "/projects", label: "项目", icon: FolderKanban },
-  { to: "/requirements/req-42/graph", label: "工作图", icon: GitBranch },
-  { to: "/releases", label: "发布", icon: ShieldCheck },
-];
-
 export function AppShell() {
-  const { snapshot, loading, connection, notice, refresh, clearNotice } = useHelm();
+  const { snapshot, loading, connection, notice, selectedMemberId, setSelectedMemberId, refresh, clearNotice } =
+    useHelm();
+  const location = useLocation();
+
+  const members = snapshot?.members ?? [];
+  const hasPendingNames = members.some((member) => member.name.endsWith("（待实名）"));
+  const graphTo = snapshot?.graphs.length
+    ? `/requirements/${snapshot.graphs[0].requirementId}/graph`
+    : "/projects#requirements-title";
+
+  const navigation = [
+    { to: "/", label: "今日", icon: Gauge, end: true },
+    { to: "/projects", label: "项目", icon: FolderKanban },
+    { to: graphTo, label: "工作图", icon: GitBranch },
+    { to: "/releases", label: "发布", icon: ShieldCheck },
+  ];
+
+  const isGraphActive = /^\/requirements\/[^/]+\/graph$/.test(location.pathname);
 
   return (
     <div className="app-shell">
@@ -30,12 +41,15 @@ export function AppShell() {
       <aside className="sidebar" aria-label="主导航">
         <Brand />
         <nav className="primary-nav" aria-label="主导航">
-          {navigation.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} className="nav-link">
-              <Icon aria-hidden="true" size={19} strokeWidth={1.8} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {navigation.map(({ to, label, icon: Icon, end }) => {
+            const isActive = label === "工作图" ? isGraphActive : end ? location.pathname === to : location.pathname.startsWith(to);
+            return (
+              <NavLink key={label} to={to} end={end} className={`nav-link${isActive ? " active" : ""}`}>
+                <Icon aria-hidden="true" size={19} strokeWidth={1.8} />
+                <span>{label}</span>
+              </NavLink>
+            );
+          })}
         </nav>
         <div className="sidebar-foot">
           <p className="eyebrow">运行模式</p>
@@ -57,6 +71,28 @@ export function AppShell() {
             <span className="workspace-mark" aria-hidden="true" />
             <span>{snapshot?.organizationName ?? "Helm Studio"}</span>
           </div>
+          <div className="topbar-perspective">
+            <div>
+              <label htmlFor="perspective-select" className="perspective-label">
+                <Users aria-hidden="true" size={16} />
+                <span>责任人视角</span>
+              </label>
+              {hasPendingNames ? <small className="perspective-note">部分成员待实名</small> : null}
+            </div>
+            <select
+              id="perspective-select"
+              className="perspective-select"
+              value={selectedMemberId}
+              onChange={(event) => setSelectedMemberId(event.target.value)}
+            >
+              <option value="all">全部责任人</option>
+              {members.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="topbar-actions">
             <button
               type="button"
@@ -77,12 +113,15 @@ export function AppShell() {
       </div>
 
       <nav className="mobile-nav" aria-label="移动端主导航">
-        {navigation.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className="mobile-nav-link">
-            <Icon aria-hidden="true" size={19} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
+        {navigation.map(({ to, label, icon: Icon, end }) => {
+          const isActive = label === "工作图" ? isGraphActive : end ? location.pathname === to : location.pathname.startsWith(to);
+          return (
+            <NavLink key={label} to={to} end={end} className={`mobile-nav-link${isActive ? " active" : ""}`}>
+              <Icon aria-hidden="true" size={19} />
+              <span>{label}</span>
+            </NavLink>
+          );
+        })}
       </nav>
 
       {notice ? (

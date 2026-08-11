@@ -4,7 +4,7 @@ import { PageHeader, ProgressBar, StatusPill } from "../components/ui";
 import { useHelm } from "../state/helm-context";
 
 export function GraphPage() {
-  const { requirementId = "req-42" } = useParams();
+  const { requirementId = "" } = useParams();
   const navigate = useNavigate();
   const { snapshot } = useHelm();
   if (!snapshot) return null;

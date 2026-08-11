@@ -1,4 +1,4 @@
-import { ArrowUpRight, Layers3, Target } from "lucide-react";
+import { ArrowUpRight, Layers3, Pencil, Plus, Settings, Target } from "lucide-react";
 import { Link } from "react-router-dom";
 import { formatDate, Initials, PageHeader, ProgressBar, StatusPill } from "../components/ui";
 import { useHelm } from "../state/helm-context";
@@ -13,6 +13,18 @@ export function ProjectsPage() {
         eyebrow="Projects & requirements"
         title="从目标，看见真实进度。"
         description="需求状态由必需节点与 Gate 推导；不允许用一个手工状态掩盖未完成的工作。"
+        action={
+          <div className="page-header-actions">
+            <Link className="cta-button" to="/projects/new">
+              <Plus aria-hidden="true" size={16} />
+              新建项目
+            </Link>
+            <Link className="cta-button cta-button--outline" to="/requirements/new">
+              <Plus aria-hidden="true" size={16} />
+              新建需求
+            </Link>
+          </div>
+        }
       />
 
       <section className="project-card-grid reveal reveal--2" aria-label="项目列表">
@@ -29,6 +41,12 @@ export function ProjectsPage() {
             <div className="project-card-meta">
               <span><strong>{project.activeRequirementCount}</strong> 活跃需求</span>
               <span><strong>{project.progress}%</strong> 必需节点完成</span>
+            </div>
+            <div className="project-card-foot" style={{ marginBlockStart: "1rem", paddingBlockStart: "0.85rem", borderBlockStart: "1px solid var(--line)" }}>
+              <Link className="text-link" to={`/projects/${project.id}/edit`}>
+                <Settings aria-hidden="true" size={15} />
+                管理项目
+              </Link>
             </div>
           </article>
         ))}
@@ -61,9 +79,18 @@ export function ProjectsPage() {
                   <td><span className="person-cell"><Initials initials={requirement.owner.initials} label={requirement.owner.name} />{requirement.owner.name}</span></td>
                   <td><time dateTime={requirement.updatedAt}>{formatDate(requirement.updatedAt)}</time></td>
                   <td>
-                    {snapshot.graphs.some((graph) => graph.requirementId === requirement.id) ? (
-                      <Link className="row-action" to={`/requirements/${requirement.id}/graph`} aria-label={`查看 ${requirement.title} 工作图`}><ArrowUpRight aria-hidden="true" size={18} /></Link>
-                    ) : <span className="muted">—</span>}
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+                      <Link className="button button--secondary" to={`/requirements/${requirement.id}/edit`} style={{ fontSize: "0.65rem", minBlockSize: "2.2rem", paddingInline: "0.65rem" }}>
+                        <Pencil aria-hidden="true" size={13} />
+                        编辑
+                      </Link>
+                      {snapshot.graphs.some((graph) => graph.requirementId === requirement.id) ? (
+                        <Link className="button button--secondary" to={`/requirements/${requirement.id}/graph`} style={{ fontSize: "0.65rem", minBlockSize: "2.2rem", paddingInline: "0.65rem" }}>
+                          <ArrowUpRight aria-hidden="true" size={13} />
+                          工作图
+                        </Link>
+                      ) : <span className="muted" style={{ fontSize: "0.63rem" }}>—</span>}
+                    </div>
                   </td>
                 </tr>
               ))}

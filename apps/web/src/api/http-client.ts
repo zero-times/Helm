@@ -1,15 +1,23 @@
 import type {
   Artifact,
+  CreateProjectInput,
+  CreateRequirementInput,
+  CreateWorkGraphInput,
   Execution,
   LiveEvent,
   PersonRef,
+  Project,
   ReleaseApprovalInput,
+  Requirement,
   RequirementStatus,
   Result,
   ResultInput,
   ReviewInput,
   TimelineEvent,
   TimelineEventType,
+  UpdateProjectInput,
+  UpdateRequirementInput,
+  WorkGraph,
   WorkItemStatus,
   WorkspaceSnapshot,
 } from "../domain";
@@ -57,6 +65,13 @@ interface ApiGraph {
   graphVersion: number;
   nodes: ApiGraphNode[];
   edges: ApiGraphEdge[];
+}
+interface ApiCreatedGraph {
+  id: string;
+  requirementId: string;
+  graphVersion: number;
+  createdAt: string;
+  updatedAt: string;
 }
 interface ApiExecution {
   id: string;
@@ -116,6 +131,7 @@ interface WorkItemApiContext {
 
 export class HttpHelmClient implements HelmClient {
   private organizationId: string | null = null;
+  private timelinePosition = 0;
   private readonly workItemContexts = new Map<string, WorkItemApiContext>();
 
   constructor(private readonly baseUrl: string) {}
@@ -129,11 +145,22 @@ export class HttpHelmClient implements HelmClient {
     const [projects, members, timelineResponse] = await Promise.all([
       this.request<ApiProject[]>(`/api/projects?organizationId=${organization.id}`),
       this.request<ApiMember[]>(`/api/members?organizationId=${organization.id}`),
-      this.request<{ events: ApiTimelineEvent[] }>(
+      this.request<{ events: ApiTimelineEvent[]; nextPosition?: number }>(
         `/api/v1/timeline?organizationId=${organization.id}&limit=250`,
       ),
     ]);
+    this.timelinePosition = timelineResponse.nextPosition
+      ?? timelineResponse.events.at(-1)?.globalPosition
+      ?? this.timelinePosition;
     const memberById = new Map(members.map((member) => [member.id, member]));
+    const pendingNameIndex = new Map(
+      members
+        .filter((member) => HUMAN_PRINCIPAL_RE.test(member.name))
+        .map((member, index) => [member.id, index + 1]),
+    );
+    const memberViews = members.map((member) =>
+      toPerson(member, member.id, pendingNameIndex.get(member.id)),
+    );
     const requirements = (
       await Promise.all(
         projects.map((project) =>
@@ -184,7 +211,8 @@ export class HttpHelmClient implements HelmClient {
         ] as const),
       ),
     );
-    const person = (id: string): PersonRef => toPerson(memberById.get(id), id);
+    const person = (id: string): PersonRef =>
+      toPerson(memberById.get(id), id, pendingNameIndex.get(id));
     const timeline = timelineResponse.events.map((event) => toTimelineEvent(event, person));
     const graphByRequirement = new Map(graphs.map((graph) => [graph.requirementId, graph]));
     const projectById = new Map(projects.map((project) => [project.id, project]));
@@ -204,7 +232,11 @@ export class HttpHelmClient implements HelmClient {
         progress,
         requiredCompleted: completed,
         requiredTotal: requiredNodes.length,
+        accountableHuman: person(requirement.accountableHumanId),
+        operationalOwner: person(requirement.operationalOwnerId),
+        assignee: person(requirement.assigneeMemberId),
         owner: person(requirement.accountableHumanId),
+        acceptanceCriteria: requirement.acceptanceCriteria ?? [],
         updatedAt: requirement.updatedAt,
       };
     });
@@ -299,11 +331,14 @@ export class HttpHelmClient implements HelmClient {
         detail: item.status === "waiting_review" ? "Result 等待人工审核" : "需要处理后才能继续",
         targetLabel: item.key,
         href: `/work-items/${item.id}`,
+        workItemId: item.id,
+        requirementIds: [item.requirementId],
       }));
 
     return {
       organizationName: organization.name,
       mode: "phase_0",
+      members: memberViews,
       projects: projects.map((project) => {
         const projectRequirements = requirementViews.filter((item) => item.projectId === project.id);
         const progress = projectRequirements.length
@@ -314,6 +349,10 @@ export class HttpHelmClient implements HelmClient {
           key: project.slug.toUpperCase(),
           name: project.name,
           goal: project.description ?? project.name,
+          slug: project.slug,
+          description: project.description ?? project.name,
+          accountableHuman: person(project.accountableHumanId),
+          operationalOwner: person(project.operationalOwnerId),
           activeRequirementCount: projectRequirements.filter((item) => item.status !== "completed").length,
           attentionCount: attention.filter((item) =>
             workItems.find((workItem) => workItem.id === item.id.replace("attention-", ""))?.requirementId &&
@@ -333,6 +372,152 @@ export class HttpHelmClient implements HelmClient {
       recentEvents: timeline.slice(-12).reverse(),
       generatedAt: new Date().toISOString(),
     };
+  }
+
+  async createRequirement(input: CreateRequirementInput): Promise<Requirement> {
+    const orgId = await this.organization();
+    const apiReq = await this.command<ApiRequirement>("/api/requirements", {
+      projectId: input.projectId,
+      goal: input.goal,
+      acceptanceCriteria: input.acceptanceCriteria,
+      accountableHumanId: input.accountableHumanId,
+      operationalOwnerId: input.operationalOwnerId,
+      assigneeMemberId: input.assigneeMemberId,
+    });
+    const memberById = new Map<string, ApiMember>();
+    try {
+      const members = await this.request<ApiMember[]>(`/api/members?organizationId=${orgId}`);
+      for (const m of members) memberById.set(m.id, m);
+    } catch { /* member lookup best-effort */ }
+    const person = (id: string): PersonRef => toPerson(memberById.get(id), id);
+    return {
+      id: apiReq.id,
+      key: `REQ-${apiReq.id.slice(0, 6)}`,
+      projectId: apiReq.projectId,
+      title: apiReq.goal,
+      objective: apiReq.goal,
+      status: mapRequirementStatus(apiReq.status, 0, 0),
+      progress: 0,
+      requiredCompleted: 0,
+      requiredTotal: 0,
+      accountableHuman: person(apiReq.accountableHumanId),
+      operationalOwner: person(apiReq.operationalOwnerId),
+      assignee: person(apiReq.assigneeMemberId),
+      owner: person(apiReq.accountableHumanId),
+      acceptanceCriteria: apiReq.acceptanceCriteria ?? [],
+      updatedAt: apiReq.updatedAt,
+    };
+  }
+
+  async createWorkGraph(requirementId: string, input: CreateWorkGraphInput): Promise<WorkGraph> {
+    const apiGraph = await this.command<ApiCreatedGraph>(`/api/requirements/${requirementId}/work-graph`, {
+      nodes: input.nodes.map((n) => ({ key: n.key, title: n.title, isRequired: n.isRequired })),
+      edges: input.edges.map((e) => ({ sourceKey: e.sourceKey, targetKey: e.targetKey, isHardDependency: e.isHardDependency })),
+    });
+    return {
+      requirementId: apiGraph.requirementId,
+      version: apiGraph.graphVersion,
+      criticalPath: [],
+      nodes: [],
+      edges: [],
+    };
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const orgId = await this.organization();
+    const apiProject = await this.command<ApiProject>("/api/projects", {
+      organizationId: orgId,
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      accountableHumanId: input.accountableHumanId,
+      operationalOwnerId: input.operationalOwnerId,
+    });
+    const memberById = new Map<string, ApiMember>();
+    try {
+      const members = await this.request<ApiMember[]>(`/api/members?organizationId=${orgId}`);
+      for (const m of members) memberById.set(m.id, m);
+    } catch { /* member lookup best-effort */ }
+    const person = (id: string): PersonRef => toPerson(memberById.get(id), id);
+    return {
+      id: apiProject.id,
+      key: apiProject.slug.toUpperCase(),
+      name: apiProject.name,
+      goal: apiProject.description ?? apiProject.name,
+      slug: apiProject.slug,
+      description: apiProject.description ?? apiProject.name,
+      accountableHuman: person(apiProject.accountableHumanId),
+      operationalOwner: person(apiProject.operationalOwnerId),
+      activeRequirementCount: 0,
+      attentionCount: 0,
+      progress: 0,
+      targetRelease: "Phase 0",
+    };
+  }
+
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    const apiProject = await this.patch<ApiProject>(`/api/projects/${id}`, input);
+    const memberById = new Map<string, ApiMember>();
+    try {
+      const orgId = await this.organization();
+      if (orgId) {
+        const members = await this.request<ApiMember[]>(`/api/members?organizationId=${orgId}`);
+        for (const m of members) memberById.set(m.id, m);
+      }
+    } catch { /* member lookup best-effort */ }
+    const person = (id: string): PersonRef => toPerson(memberById.get(id), id);
+    return {
+      id: apiProject.id,
+      key: (input.slug ?? apiProject.slug).toUpperCase(),
+      name: input.name ?? apiProject.name,
+      goal: input.description ?? apiProject.description ?? apiProject.name,
+      slug: input.slug ?? apiProject.slug,
+      description: input.description ?? apiProject.description ?? apiProject.name,
+      accountableHuman: person(apiProject.accountableHumanId),
+      operationalOwner: person(apiProject.operationalOwnerId),
+      activeRequirementCount: 0,
+      attentionCount: 0,
+      progress: 0,
+      targetRelease: "Phase 0",
+    };
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    await this.request<void>(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
+  async updateRequirement(id: string, input: UpdateRequirementInput): Promise<Requirement> {
+    const apiReq = await this.patch<ApiRequirement>(`/api/requirements/${id}`, input);
+    const memberById = new Map<string, ApiMember>();
+    try {
+      const orgId = await this.organization();
+      if (orgId) {
+        const members = await this.request<ApiMember[]>(`/api/members?organizationId=${orgId}`);
+        for (const m of members) memberById.set(m.id, m);
+      }
+    } catch { /* member lookup best-effort */ }
+    const person = (id: string): PersonRef => toPerson(memberById.get(id), id);
+    return {
+      id: apiReq.id,
+      key: `REQ-${apiReq.id.slice(0, 6)}`,
+      projectId: apiReq.projectId,
+      title: input.goal ?? apiReq.goal,
+      objective: input.goal ?? apiReq.goal,
+      status: mapRequirementStatus(apiReq.status, 0, 0),
+      progress: 0,
+      requiredCompleted: 0,
+      requiredTotal: 0,
+      accountableHuman: person(input.accountableHumanId ?? apiReq.accountableHumanId),
+      operationalOwner: person(input.operationalOwnerId ?? apiReq.operationalOwnerId),
+      assignee: person(input.assigneeMemberId ?? apiReq.assigneeMemberId),
+      owner: person(input.accountableHumanId ?? apiReq.accountableHumanId),
+      acceptanceCriteria: input.acceptanceCriteria ?? apiReq.acceptanceCriteria ?? [],
+      updatedAt: apiReq.updatedAt,
+    };
+  }
+
+  async deleteRequirement(id: string): Promise<void> {
+    await this.request<void>(`/api/requirements/${id}`, { method: "DELETE" });
   }
 
   async beginExecution(workItemId: string, expectedVersion: number): Promise<void> {
@@ -433,11 +618,15 @@ export class HttpHelmClient implements HelmClient {
     onConnectionChange({ state: "connecting" });
     void this.organization().then((organizationId) => {
       if (closed || !organizationId) return;
-      const query = new URLSearchParams({ organizationId });
+      const query = new URLSearchParams({
+        organizationId,
+        afterPosition: String(this.timelinePosition),
+      });
       events = new EventSource(`${this.baseUrl}/api/v1/events?${query}`);
       events.onopen = () => onConnectionChange({ state: "live", lastEventAt: new Date().toISOString() });
       events.onmessage = (message) => {
         const raw = JSON.parse(message.data) as ApiTimelineEvent;
+        this.timelinePosition = Math.max(this.timelinePosition, raw.globalPosition);
         onConnectionChange({ state: "live", lastEventAt: raw.occurredAt });
         onEvent({ id: raw.timelineEventId, type: "workspace.updated", occurredAt: raw.occurredAt, entityId: raw.entityId });
       };
@@ -475,6 +664,16 @@ export class HttpHelmClient implements HelmClient {
     });
   }
 
+  private patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
   private async optional<T>(path: string): Promise<T | null> {
     const response = await fetch(`${this.baseUrl}${path}`, { credentials: "same-origin" });
     if (response.status === 404) return null;
@@ -496,11 +695,22 @@ export class HttpHelmClient implements HelmClient {
   }
 }
 
-function toPerson(member: ApiMember | undefined, fallbackId: string): PersonRef {
-  const name = member?.name ?? "Unknown";
-  const initials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "?";
+function toPerson(
+  member: ApiMember | undefined,
+  fallbackId: string,
+  pendingIndex?: number,
+): PersonRef {
+  const rawName = member?.name ?? "Unknown";
+  const name = HUMAN_PRINCIPAL_RE.test(rawName) && pendingIndex
+    ? `成员 ${String(pendingIndex).padStart(2, "0")}（待实名）`
+    : rawName;
+  const initials = name !== rawName
+    ? (name.match(/成员\s*(\d+)/)?.[1] ?? "?")
+    : rawName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "?";
   return { id: member?.id ?? fallbackId, name, initials };
 }
+
+const HUMAN_PRINCIPAL_RE = /^Human Principal [0-9a-f]+$/i;
 
 function mapRequirementStatus(
   status: ApiRequirement["status"],
@@ -579,6 +789,7 @@ function toTimelineEvent(event: ApiTimelineEvent, person: (id: string) => Person
     title: event.summary,
     summary: typeof event.details.body === "string" ? event.details.body : event.summary,
     actor: person(event.actorMemberId),
+    ...(event.workItemId ? { workItemId: event.workItemId } : {}),
     occurredAt: event.occurredAt,
     entityVersion: event.entityVersion,
     rawLog: JSON.stringify({ source: event.source, details: event.details }, null, 2),
@@ -589,6 +800,7 @@ function emptyWorkspace(): WorkspaceSnapshot {
   return {
     organizationName: "Helm",
     mode: "phase_0",
+    members: [],
     projects: [],
     requirements: [],
     graphs: [],

@@ -196,4 +196,137 @@ describe('core-domain API', () => {
       error: 'ACCOUNTABLE_HUMAN_REQUIRED',
     });
   });
+
+  it('updates projects and requirements while guarding destructive deletes', async () => {
+    const suffix = randomUUID();
+    const organizationResponse = await server.inject({
+      method: 'POST',
+      url: '/api/organizations',
+      payload: { name: 'CRUD Test Organization', slug: `crud-${suffix}` },
+    });
+    expect(organizationResponse.statusCode).toBe(201);
+    const organization = organizationResponse.json<{ id: string }>();
+    createdOrganizationIds.push(organization.id);
+
+    const memberResponse = await server.inject({
+      method: 'POST',
+      url: '/api/members',
+      payload: {
+        organizationId: organization.id,
+        memberType: 'human',
+        name: 'CRUD Owner',
+      },
+    });
+    const member = memberResponse.json<{ id: string }>();
+
+    const createProject = (name: string, slug: string) => server.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        organizationId: organization.id,
+        name,
+        slug,
+        accountableHumanId: member.id,
+        operationalOwnerId: member.id,
+      },
+    });
+
+    const projectResponse = await createProject('Editable Project', `editable-${suffix}`);
+    const project = projectResponse.json<{ id: string }>();
+    const emptyProjectResponse = await createProject('Empty Project', `empty-${suffix}`);
+    const emptyProject = emptyProjectResponse.json<{ id: string }>();
+
+    const renamedProject = await server.inject({
+      method: 'PATCH',
+      url: `/api/projects/${project.id}`,
+      payload: { name: 'Renamed Project', description: 'Updated description' },
+    });
+    expect(renamedProject.statusCode).toBe(200);
+    expect(renamedProject.json()).toMatchObject({
+      name: 'Renamed Project',
+      description: 'Updated description',
+    });
+
+    const slugConflict = await server.inject({
+      method: 'PATCH',
+      url: `/api/projects/${emptyProject.id}`,
+      payload: { slug: `editable-${suffix}` },
+    });
+    expect(slugConflict.statusCode).toBe(409);
+
+    const requirementResponse = await server.inject({
+      method: 'POST',
+      url: '/api/requirements',
+      payload: {
+        projectId: project.id,
+        goal: 'Original requirement',
+        acceptanceCriteria: ['Original criterion'],
+        accountableHumanId: member.id,
+        operationalOwnerId: member.id,
+        assigneeMemberId: member.id,
+      },
+    });
+    const requirement = requirementResponse.json<{ id: string }>();
+
+    const updatedRequirement = await server.inject({
+      method: 'PATCH',
+      url: `/api/requirements/${requirement.id}`,
+      payload: {
+        goal: 'Updated requirement',
+        acceptanceCriteria: ['Updated criterion'],
+      },
+    });
+    expect(updatedRequirement.statusCode).toBe(200);
+    expect(updatedRequirement.json()).toMatchObject({
+      goal: 'Updated requirement',
+      acceptanceCriteria: ['Updated criterion'],
+    });
+
+    const guardedProjectDelete = await server.inject({
+      method: 'DELETE',
+      url: `/api/projects/${project.id}`,
+    });
+    expect(guardedProjectDelete.statusCode).toBe(409);
+
+    const deletedRequirement = await server.inject({
+      method: 'DELETE',
+      url: `/api/requirements/${requirement.id}`,
+    });
+    expect(deletedRequirement.statusCode).toBe(204);
+
+    const historicalRequirementResponse = await server.inject({
+      method: 'POST',
+      url: '/api/requirements',
+      payload: {
+        projectId: project.id,
+        goal: 'Requirement with history',
+        acceptanceCriteria: ['History is retained'],
+        accountableHumanId: member.id,
+        operationalOwnerId: member.id,
+        assigneeMemberId: member.id,
+      },
+    });
+    const historicalRequirement = historicalRequirementResponse.json<{ id: string }>();
+    const graphResponse = await server.inject({
+      method: 'POST',
+      url: `/api/requirements/${historicalRequirement.id}/work-graph`,
+      payload: {
+        nodes: [{ key: 'implement', title: 'Implement', isRequired: true }],
+        edges: [],
+      },
+    });
+    expect(graphResponse.statusCode).toBe(201);
+
+    const guardedRequirementDelete = await server.inject({
+      method: 'DELETE',
+      url: `/api/requirements/${historicalRequirement.id}`,
+    });
+    expect(guardedRequirementDelete.statusCode).toBe(409);
+
+    const deletedEmptyProject = await server.inject({
+      method: 'DELETE',
+      url: `/api/projects/${emptyProject.id}`,
+    });
+    expect(deletedEmptyProject.statusCode).toBe(204);
+  });
 });

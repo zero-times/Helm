@@ -3,17 +3,23 @@ import type { WorkspaceSnapshot } from "../domain";
 const now = "2026-08-11T02:10:00.000Z";
 const owner = { id: "member-wang", name: "王同学", initials: "王" };
 const reviewer = { id: "member-li", name: "李工", initials: "李" };
+const zhang = { id: "member-zhang", name: "张师", initials: "张" };
 
 export function createDemoSnapshot(): WorkspaceSnapshot {
   return structuredClone({
     organizationName: "Helm Studio",
     mode: "phase_0",
+    members: [owner, reviewer, zhang],
     projects: [
       {
         id: "project-helm",
         key: "HELM",
         name: "Helm Workflow OS",
         goal: "让一人团队用可审计流程完成从需求到发布的闭环。",
+        slug: "helm",
+        description: "让一人团队用可审计流程完成从需求到发布的闭环。",
+        accountableHuman: owner,
+        operationalOwner: owner,
         activeRequirementCount: 3,
         attentionCount: 2,
         progress: 64,
@@ -24,6 +30,10 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         key: "SITE",
         name: "Product Site",
         goal: "为首批试用者提供清晰的产品说明和加入入口。",
+        slug: "site",
+        description: "为首批试用者提供清晰的产品说明和加入入口。",
+        accountableHuman: owner,
+        operationalOwner: reviewer,
         activeRequirementCount: 1,
         attentionCount: 0,
         progress: 82,
@@ -41,7 +51,11 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         progress: 50,
         requiredCompleted: 2,
         requiredTotal: 4,
+        accountableHuman: owner,
+        operationalOwner: owner,
+        assignee: owner,
         owner,
+        acceptanceCriteria: ["30 秒内完成安全登录", "支持过期与拒绝路径"],
         updatedAt: now,
       },
       {
@@ -54,7 +68,11 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         progress: 100,
         requiredCompleted: 4,
         requiredTotal: 4,
+        accountableHuman: reviewer,
+        operationalOwner: reviewer,
+        assignee: owner,
         owner: reviewer,
+        acceptanceCriteria: ["Timeline 记录所有状态变更", "支持版本回溯"],
         updatedAt: "2026-08-10T15:32:00.000Z",
       },
       {
@@ -67,7 +85,11 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         progress: 75,
         requiredCompleted: 3,
         requiredTotal: 4,
+        accountableHuman: owner,
+        operationalOwner: reviewer,
+        assignee: owner,
         owner,
+        acceptanceCriteria: ["阻塞 Bug 为 0 时方可发布", "回滚计划已确认"],
         updatedAt: "2026-08-11T01:48:00.000Z",
       },
       {
@@ -80,7 +102,11 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         progress: 90,
         requiredCompleted: 3,
         requiredTotal: 3,
+        accountableHuman: owner,
+        operationalOwner: reviewer,
+        assignee: owner,
         owner,
+        acceptanceCriteria: ["15 秒内理解价值", "清晰的加入入口"],
         updatedAt: "2026-08-10T12:05:00.000Z",
       },
     ],
@@ -258,6 +284,7 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         detail: "所有强制检查已通过，存在 1 项已记录的非阻塞风险。",
         targetLabel: "审阅发布包",
         href: "/releases",
+        requirementIds: ["req-41", "req-43"],
       },
       {
         id: "attention-work",
@@ -266,6 +293,8 @@ export function createDemoSnapshot(): WorkspaceSnapshot {
         detail: "Contract 已固定，任务已就绪 35 分钟。",
         targetLabel: "开始任务",
         href: "/work-items/wi-build",
+        workItemId: "wi-build",
+        requirementIds: ["req-42"],
       },
     ],
     recentEvents: [

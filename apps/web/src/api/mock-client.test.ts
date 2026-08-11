@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHelmClient } from "./client";
+import { HttpHelmClient } from "./http-client";
 import { MockHelmClient } from "./mock-client";
 
 describe("MockHelmClient", () => {
@@ -98,5 +100,170 @@ describe("MockHelmClient", () => {
     unsubscribe();
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
+  });
+
+  it("defaults to HttpHelmClient when VITE_DATA_MODE is not mock", () => {
+    const original = (import.meta.env as Record<string, unknown>).VITE_DATA_MODE;
+    delete (import.meta.env as Record<string, unknown>).VITE_DATA_MODE;
+
+    const client = createHelmClient();
+    expect(client).toBeInstanceOf(HttpHelmClient);
+
+    if (original !== undefined) {
+      (import.meta.env as Record<string, unknown>).VITE_DATA_MODE = original;
+    }
+  });
+
+  it("creates MockHelmClient when VITE_DATA_MODE=mock is explicitly set", () => {
+    const original = (import.meta.env as Record<string, unknown>).VITE_DATA_MODE;
+    (import.meta.env as Record<string, unknown>).VITE_DATA_MODE = "mock";
+
+    const client = createHelmClient();
+    expect(client).toBeInstanceOf(MockHelmClient);
+
+    (import.meta.env as Record<string, unknown>).VITE_DATA_MODE = original;
+  });
+
+  it("creates, updates, and deletes a project with correct shape", async () => {
+    const client = new MockHelmClient();
+    const project = await client.createProject({
+      name: "New Project",
+      slug: "new-project",
+      description: "A test project",
+      accountableHumanId: "member-wang",
+      operationalOwnerId: "member-li",
+    });
+
+    expect(project.id).toMatch(/^project-/);
+    expect(project.key).toBe("NEW-PROJECT");
+    expect(project.slug).toBe("new-project");
+    expect(project.name).toBe("New Project");
+    expect(project.description).toBe("A test project");
+    expect(project.accountableHuman?.name).toBe("王同学");
+    expect(project.operationalOwner?.name).toBe("李工");
+
+    // Update it
+    const updated = await client.updateProject(project.id, {
+      name: "Renamed Project",
+      slug: "renamed-project",
+    });
+    expect(updated.name).toBe("Renamed Project");
+    expect(updated.key).toBe("RENAMED-PROJECT");
+
+    // Verify snapshot
+    const snapshot = await client.loadWorkspace();
+    const inSnapshot = snapshot.projects.find((p) => p.id === project.id)!;
+    expect(inSnapshot.name).toBe("Renamed Project");
+    expect(inSnapshot.slug).toBe("renamed-project");
+
+    // Delete it (no requirements yet)
+    await client.deleteProject(project.id);
+    const afterDelete = await client.loadWorkspace();
+    expect(afterDelete.projects.find((p) => p.id === project.id)).toBeUndefined();
+  });
+
+  it("blocks project deletion when requirements still exist", async () => {
+    const client = new MockHelmClient();
+    await expect(client.deleteProject("project-helm")).rejects.toThrow("项目仍有需求");
+  });
+
+  it("updates and deletes a requirement with correct shape", async () => {
+    const client = new MockHelmClient();
+
+    const updated = await client.updateRequirement("req-42", {
+      goal: "Updated goal text",
+      acceptanceCriteria: ["Criterion A", "Criterion B"],
+      accountableHumanId: "member-li",
+    });
+    expect(updated.title).toBe("Updated goal text");
+    expect(updated.objective).toBe("Updated goal text");
+    expect(updated.acceptanceCriteria).toEqual(["Criterion A", "Criterion B"]);
+    expect(updated.accountableHuman.name).toBe("李工");
+
+    // Verify snapshot
+    const snapshot = await client.loadWorkspace();
+    const inSnapshot = snapshot.requirements.find((r) => r.id === "req-42")!;
+    expect(inSnapshot.title).toBe("Updated goal text");
+    expect(inSnapshot.acceptanceCriteria).toEqual(["Criterion A", "Criterion B"]);
+  });
+
+  it("blocks requirement deletion when a work graph exists", async () => {
+    const client = new MockHelmClient();
+    // req-42 has a graph
+    await expect(client.deleteRequirement("req-42")).rejects.toThrow("工作图包含执行历史");
+  });
+
+  it("allows requirement deletion when no work graph exists", async () => {
+    const client = new MockHelmClient();
+    // req-site-7 has no graph
+    const before = await client.loadWorkspace();
+    expect(before.requirements.find((r) => r.id === "req-site-7")).toBeTruthy();
+
+    await client.deleteRequirement("req-site-7");
+    const after = await client.loadWorkspace();
+    expect(after.requirements.find((r) => r.id === "req-site-7")).toBeUndefined();
+  });
+
+  it("creates a new requirement and returns it with correct shape", async () => {
+    const client = new MockHelmClient();
+    const requirement = await client.createRequirement({
+      projectId: "project-helm",
+      goal: "端到端测试基础设施",
+      acceptanceCriteria: ["覆盖率 > 80%"],
+      accountableHumanId: "member-wang",
+      operationalOwnerId: "member-li",
+      assigneeMemberId: "member-wang",
+    });
+
+    expect(requirement.id).toMatch(/^req-/);
+    expect(requirement.projectId).toBe("project-helm");
+    expect(requirement.title).toBe("端到端测试基础设施");
+    expect(requirement.status).toBe("draft");
+    expect(requirement.acceptanceCriteria).toEqual(["覆盖率 > 80%"]);
+
+    const snapshot = await client.loadWorkspace();
+    expect(snapshot.requirements.find((r) => r.id === requirement.id)).toBeTruthy();
+  });
+
+  it("creates a work graph for a requirement with sequential dependencies", async () => {
+    const client = new MockHelmClient();
+    const requirement = await client.createRequirement({
+      projectId: "project-helm",
+      goal: "CI/CD 流水线",
+      acceptanceCriteria: ["构建时间 < 5 分钟"],
+      accountableHumanId: "member-wang",
+      operationalOwnerId: "member-li",
+      assigneeMemberId: "member-wang",
+    });
+
+    const graph = await client.createWorkGraph(requirement.id, {
+      nodes: [
+        { key: "setup", title: "搭建 CI 环境", isRequired: true },
+        { key: "pipeline", title: "编写流水线脚本", isRequired: true },
+        { key: "verify", title: "验证构建结果", isRequired: false },
+      ],
+      edges: [
+        { sourceKey: "setup", targetKey: "pipeline", isHardDependency: true },
+        { sourceKey: "pipeline", targetKey: "verify", isHardDependency: true },
+      ],
+    });
+
+    expect(graph.requirementId).toBe(requirement.id);
+    expect(graph.nodes).toHaveLength(3);
+    expect(graph.edges).toHaveLength(2);
+    expect(graph.version).toBe(1);
+
+    // First node should be ready
+    const firstNode = graph.nodes[0];
+    expect(firstNode.required).toBe(true);
+
+    const snapshot = await client.loadWorkspace();
+    const firstWi = snapshot.workItems.find((w) => w.id === firstNode.workItemId);
+    expect(firstWi?.status).toBe("ready");
+
+    // Requirement stats updated
+    const updatedReq = snapshot.requirements.find((r) => r.id === requirement.id);
+    expect(updatedReq?.requiredTotal).toBe(2);
+    expect(updatedReq?.requiredCompleted).toBe(0);
   });
 });

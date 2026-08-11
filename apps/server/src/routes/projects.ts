@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  NonEmptyFieldRequiredError,
   NotFoundError,
   assertAccountableIsHuman,
   assertSameOrganization,
@@ -25,6 +26,14 @@ const paramsSchema = z.object({
 
 const querySchema = z.object({
   organizationId: z.string().uuid().optional(),
+});
+
+const patchBodySchema = z.object({
+  name: z.string().min(1).optional(),
+  slug: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  accountableHumanId: z.string().uuid().optional(),
+  operationalOwnerId: z.string().uuid().optional(),
 });
 
 export interface ProjectRoutesOptions {
@@ -192,6 +201,181 @@ export const projectRoutes: FastifyPluginCallback<ProjectRoutesOptions> = (
         (m) => m.id === project.operationalOwnerId,
       ) ?? null,
     };
+  });
+
+  // Update project (partial)
+  server.patch('/api/projects/:id', async (request) => {
+    const { id } = paramsSchema.parse(request.params);
+    const body = patchBodySchema.parse(request.body);
+
+    // Require at least one field
+    const hasAnyField =
+      body.name !== undefined ||
+      body.slug !== undefined ||
+      body.description !== undefined ||
+      body.accountableHumanId !== undefined ||
+      body.operationalOwnerId !== undefined;
+
+    if (!hasAnyField) {
+      throw new NonEmptyFieldRequiredError(
+        'at least one of: name, slug, description, accountableHumanId, operationalOwnerId',
+      );
+    }
+
+    // Load existing project
+    const rows = await database
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, id))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundError('Project', id);
+    }
+
+    const project = ensureRow(rows[0], 'project');
+
+    // Validate and trim name
+    if (body.name !== undefined) {
+      const trimmed = body.name.trim();
+      if (!trimmed) throw new NonEmptyFieldRequiredError('name');
+      body.name = trimmed;
+    }
+
+    // Validate and trim slug
+    if (body.slug !== undefined) {
+      const trimmed = body.slug.trim();
+      if (!trimmed) throw new NonEmptyFieldRequiredError('slug');
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(trimmed)) {
+        throw new ConflictError(
+          'slug must be lowercase alphanumeric with hyphens',
+        );
+      }
+      body.slug = trimmed;
+
+      // Slug uniqueness check (exclude current project)
+      const sameSlugProjects = await database
+        .select({ id: schema.projects.id })
+        .from(schema.projects)
+        .where(
+          and(
+            eq(schema.projects.organizationId, project.organizationId),
+            eq(schema.projects.slug, body.slug),
+          ),
+        );
+
+      const slugConflict = sameSlugProjects.filter(
+        (p) => p.id !== id,
+      );
+
+      if (slugConflict.length > 0) {
+        throw new ConflictError(
+          'Project slug already exists in this organization',
+        );
+      }
+    }
+
+    // Handle description (nullable)
+    if (body.description !== undefined) {
+      body.description = body.description?.trim() ?? null;
+    }
+
+    // If member IDs changed, verify them against the project's org
+    if (
+      body.accountableHumanId !== undefined ||
+      body.operationalOwnerId !== undefined
+    ) {
+      const memberIdsToCheck = new Set<string>();
+      if (body.accountableHumanId !== undefined)
+        memberIdsToCheck.add(body.accountableHumanId);
+      if (body.operationalOwnerId !== undefined)
+        memberIdsToCheck.add(body.operationalOwnerId);
+
+      const memberRows = await database
+        .select()
+        .from(schema.members)
+        .where(
+          and(
+            eq(schema.members.organizationId, project.organizationId),
+            inArray(schema.members.id, [...memberIdsToCheck]),
+          ),
+        );
+
+      if (body.accountableHumanId !== undefined) {
+        const accountableMember = memberRows.find(
+          (m) => m.id === body.accountableHumanId,
+        );
+        if (!accountableMember) {
+          throw new NotFoundError('Member', body.accountableHumanId);
+        }
+        assertAccountableIsHuman(accountableMember, project.organizationId);
+      }
+
+      if (body.operationalOwnerId !== undefined) {
+        const operationalOwner = memberRows.find(
+          (m) => m.id === body.operationalOwnerId,
+        );
+        if (!operationalOwner) {
+          throw new NotFoundError('Member', body.operationalOwnerId);
+        }
+        assertSameOrganization(
+          operationalOwner,
+          project.organizationId,
+          'operationalOwnerId',
+        );
+      }
+    }
+
+    // Build update payload
+    const updateData: Record<string, unknown> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.slug !== undefined) updateData.slug = body.slug;
+    if (body.description !== undefined) updateData.description = body.description;
+    if (body.accountableHumanId !== undefined)
+      updateData.accountableHumanId = body.accountableHumanId;
+    if (body.operationalOwnerId !== undefined)
+      updateData.operationalOwnerId = body.operationalOwnerId;
+    updateData.updatedAt = new Date();
+
+    const [updated] = await database
+      .update(schema.projects)
+      .set(updateData)
+      .where(eq(schema.projects.id, id))
+      .returning();
+
+    return updated;
+  });
+
+  // Delete project (only if no requirements exist)
+  server.delete('/api/projects/:id', async (request, reply) => {
+    const { id } = paramsSchema.parse(request.params);
+
+    const rows = await database
+      .select({ id: schema.projects.id })
+      .from(schema.projects)
+      .where(eq(schema.projects.id, id))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundError('Project', id);
+    }
+
+    // Guard: cannot delete project that still has requirements
+    const requirementRows = await database
+      .select({ id: schema.requirements.id })
+      .from(schema.requirements)
+      .where(eq(schema.requirements.projectId, id))
+      .limit(1);
+
+    if (requirementRows.length > 0) {
+      throw new ConflictError(
+        'Project still has requirements. Delete or move all requirements from this project first.',
+      );
+    }
+
+    await database.delete(schema.projects).where(eq(schema.projects.id, id));
+
+    void reply.code(204);
   });
 
   done();

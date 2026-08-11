@@ -1,11 +1,19 @@
 import { createDemoSnapshot } from "../data/demo";
 import type {
+  CreateProjectInput,
+  CreateRequirementInput,
+  CreateWorkGraphInput,
   LiveEvent,
+  Project,
   ReleaseApprovalInput,
+  Requirement,
   Result,
   ResultInput,
   ReviewInput,
   TimelineEvent,
+  UpdateProjectInput,
+  UpdateRequirementInput,
+  WorkGraph,
   WorkItem,
   WorkspaceSnapshot,
 } from "../domain";
@@ -15,9 +23,213 @@ const actor = { id: "member-wang", name: "王同学", initials: "王" };
 
 export class MockHelmClient implements HelmClient {
   private snapshot = createDemoSnapshot();
+  private readonly createdRequirementCriteria = new Map<string, string[]>();
 
   async loadWorkspace(): Promise<WorkspaceSnapshot> {
     return structuredClone(this.snapshot);
+  }
+
+  async createRequirement(input: CreateRequirementInput): Promise<Requirement> {
+    const reqId = `req-${crypto.randomUUID().slice(0, 8)}`;
+    const index = this.snapshot.requirements.length + 1;
+    const project = this.snapshot.projects.find((p) => p.id === input.projectId);
+    const memberById = new Map(this.snapshot.members.map((m) => [m.id, m]));
+    const person = (id: string) => memberById.get(id) ?? { id, name: "Unknown", initials: "?" };
+    const requirement: Requirement = {
+      id: reqId,
+      key: `${project?.key ?? "REQ"}-${index}`,
+      projectId: input.projectId,
+      title: input.goal,
+      objective: input.goal,
+      status: "draft",
+      progress: 0,
+      requiredCompleted: 0,
+      requiredTotal: 0,
+      accountableHuman: person(input.accountableHumanId),
+      operationalOwner: person(input.operationalOwnerId),
+      assignee: person(input.assigneeMemberId),
+      owner: person(input.accountableHumanId),
+      acceptanceCriteria: [...input.acceptanceCriteria],
+      updatedAt: new Date().toISOString(),
+    };
+    this.snapshot.requirements.push(requirement);
+    this.createdRequirementCriteria.set(reqId, [...input.acceptanceCriteria]);
+    // update project stats
+    const proj = this.snapshot.projects.find((p) => p.id === input.projectId);
+    if (proj) {
+      proj.activeRequirementCount += 1;
+    }
+    this.touchWorkspace(reqId);
+    return structuredClone(requirement);
+  }
+
+  async createWorkGraph(requirementId: string, input: CreateWorkGraphInput): Promise<WorkGraph> {
+    const requirement = this.snapshot.requirements.find((r) => r.id === requirementId);
+    if (!requirement) throw new Error("需求不存在。");
+
+    const nodes = input.nodes.map((node, idx) => {
+      const nodeId = `node-${crypto.randomUUID().slice(0, 8)}`;
+      const wiId = `wi-${crypto.randomUUID().slice(0, 8)}`;
+      const workItem: WorkItem = {
+        id: wiId,
+        key: `WORK-${100 + this.snapshot.workItems.length + idx}`,
+        requirementId,
+        title: node.title,
+        objective: requirement.objective,
+        acceptanceCriteria: this.createdRequirementCriteria.get(requirementId) ?? [requirement.objective],
+        phase: node.isRequired ? "Required" : "Optional",
+        status: "draft",
+        version: 1,
+        responsibilities: {
+          accountableHuman: requirement.accountableHuman,
+          operationalOwner: requirement.operationalOwner,
+          assignee: requirement.assignee,
+        },
+        executions: [],
+        timeline: [],
+      };
+      this.snapshot.workItems.push(workItem);
+      return {
+        id: nodeId,
+        workItemId: wiId,
+        title: node.title,
+        kind: "work" as const,
+        phase: node.isRequired ? "Required" : "Optional",
+        status: "draft" as const,
+        required: node.isRequired,
+      };
+    });
+
+    const nodeByKey = new Map(input.nodes.map((n, i) => [n.key, nodes[i]]));
+    const edges = input.edges.map((edge) => ({
+      id: `edge-${crypto.randomUUID().slice(0, 8)}`,
+      source: nodeByKey.get(edge.sourceKey)?.id ?? edge.sourceKey,
+      target: nodeByKey.get(edge.targetKey)?.id ?? edge.targetKey,
+      kind: "hard_dependency" as const,
+    }));
+
+    const graph: WorkGraph = {
+      requirementId,
+      version: 1,
+      criticalPath: nodes.filter((n) => n.required).map((n) => n.workItemId),
+      nodes,
+      edges,
+    };
+    this.snapshot.graphs.push(graph);
+
+    // Make the first node ready
+    const firstNode = nodes[0];
+    if (firstNode) {
+      const wi = this.snapshot.workItems.find((w) => w.id === firstNode.workItemId);
+      if (wi) {
+        wi.status = "ready";
+        wi.version += 1;
+      }
+    }
+
+    // update requirement stats
+    const requiredNodes = nodes.filter((n) => n.required);
+    requirement.requiredTotal = requiredNodes.length;
+    requirement.requiredCompleted = 0;
+
+    this.touchWorkspace(requirementId);
+    return structuredClone(graph);
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const projectId = `project-${input.slug.slice(0, 20)}`;
+    const memberById = new Map(this.snapshot.members.map((m) => [m.id, m]));
+    const person = (id: string) => memberById.get(id) ?? { id, name: "Unknown", initials: "?" };
+    const project: Project = {
+      id: projectId,
+      key: input.slug.toUpperCase(),
+      name: input.name,
+      goal: input.description,
+      slug: input.slug,
+      description: input.description,
+      accountableHuman: person(input.accountableHumanId),
+      operationalOwner: person(input.operationalOwnerId),
+      activeRequirementCount: 0,
+      attentionCount: 0,
+      progress: 0,
+      targetRelease: "Phase 0",
+    };
+    this.snapshot.projects.push(project);
+    this.touchWorkspace(projectId);
+    return structuredClone(project);
+  }
+
+  async updateProject(id: string, input: UpdateProjectInput): Promise<Project> {
+    const project = this.snapshot.projects.find((p) => p.id === id);
+    if (!project) throw new Error("项目不存在。");
+    const memberById = new Map(this.snapshot.members.map((m) => [m.id, m]));
+    const person = (memberId: string) => memberById.get(memberId) ?? { id: memberId, name: "Unknown", initials: "?" };
+
+    if (input.name !== undefined) project.name = input.name;
+    if (input.slug !== undefined) {
+      project.slug = input.slug;
+      project.key = input.slug.toUpperCase();
+    }
+    if (input.description !== undefined) {
+      project.description = input.description;
+      project.goal = input.description;
+    }
+    if (input.accountableHumanId !== undefined) {
+      project.accountableHuman = person(input.accountableHumanId);
+    }
+    if (input.operationalOwnerId !== undefined) {
+      project.operationalOwner = person(input.operationalOwnerId);
+    }
+
+    this.touchWorkspace(id);
+    return structuredClone(project);
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    const hasRequirements = this.snapshot.requirements.some((req) => req.projectId === id);
+    if (hasRequirements) throw new Error("项目仍有需求，无法删除。请先移除项目下的所有需求。");
+    const index = this.snapshot.projects.findIndex((p) => p.id === id);
+    if (index === -1) throw new Error("项目不存在。");
+    this.snapshot.projects.splice(index, 1);
+    this.touchWorkspace(id);
+  }
+
+  async updateRequirement(id: string, input: UpdateRequirementInput): Promise<Requirement> {
+    const requirement = this.snapshot.requirements.find((r) => r.id === id);
+    if (!requirement) throw new Error("需求不存在。");
+    const memberById = new Map(this.snapshot.members.map((m) => [m.id, m]));
+    const person = (memberId: string) => memberById.get(memberId) ?? { id: memberId, name: "Unknown", initials: "?" };
+
+    if (input.goal !== undefined) {
+      requirement.title = input.goal;
+      requirement.objective = input.goal;
+    }
+    if (input.acceptanceCriteria !== undefined) {
+      requirement.acceptanceCriteria = [...input.acceptanceCriteria];
+    }
+    if (input.accountableHumanId !== undefined) {
+      requirement.accountableHuman = person(input.accountableHumanId);
+    }
+    if (input.operationalOwnerId !== undefined) {
+      requirement.operationalOwner = person(input.operationalOwnerId);
+    }
+    if (input.assigneeMemberId !== undefined) {
+      requirement.assignee = person(input.assigneeMemberId);
+    }
+    requirement.updatedAt = new Date().toISOString();
+
+    this.touchWorkspace(id);
+    return structuredClone(requirement);
+  }
+
+  async deleteRequirement(id: string): Promise<void> {
+    const requirement = this.snapshot.requirements.find((r) => r.id === id);
+    if (!requirement) throw new Error("需求不存在。");
+    const hasGraph = this.snapshot.graphs.some((g) => g.requirementId === id);
+    if (hasGraph) throw new Error("需求已有工作图，无法删除。工作图包含执行历史和 Timeline，删除会导致审计链不完整。");
+    const reqIndex = this.snapshot.requirements.findIndex((r) => r.id === id);
+    if (reqIndex !== -1) this.snapshot.requirements.splice(reqIndex, 1);
+    this.touchWorkspace(id);
   }
 
   async beginExecution(workItemId: string, expectedVersion: number): Promise<void> {

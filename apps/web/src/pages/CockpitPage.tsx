@@ -1,4 +1,4 @@
-import { ArrowUpRight, CheckCircle2, GitBranch, ShieldCheck, Sparkles, TimerReset } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Compass, GitBranch, Plus, ShieldCheck, Sparkles, TimerReset } from "lucide-react";
 import { Link } from "react-router-dom";
 import { formatDate, PageHeader, ProgressBar } from "../components/ui";
 import { useHelm } from "../state/helm-context";
@@ -18,9 +18,15 @@ export function CockpitPage() {
         title={snapshot.attention.length ? `今天，只需要处理 ${snapshot.attention.length} 件事。` : "今天没有待决事项。"}
         description="Helm 已把执行噪声压缩成可行动的决策。其余工作按 Work Graph 正常推进。"
         action={
-          <div className="day-stamp" aria-label="2026年8月11日">
-            <span>11</span>
-            <small>AUG</small>
+          <div className="page-header-actions">
+            <Link className="cta-button" to="/requirements/new">
+              <Plus aria-hidden="true" size={16} />
+              新建需求
+            </Link>
+            <div className="day-stamp" aria-label="2026年8月11日">
+              <span>11</span>
+              <small>AUG</small>
+            </div>
           </div>
         }
       />
@@ -61,23 +67,35 @@ export function CockpitPage() {
             </div>
             <span className="count-badge">{snapshot.attention.length}</span>
           </div>
-          <div className="attention-list">
-            {snapshot.attention.map((item, index) => (
-              <article key={item.id} className={`attention-item attention-item--${item.severity}`}>
-                <span className="attention-index">0{index + 1}</span>
-                <div>
-                  <p className="attention-kicker">
-                    {item.severity === "decision" ? "需要授权" : item.severity === "blocked" ? "流程阻塞" : "可以行动"}
-                  </p>
-                  <h3>{item.title}</h3>
-                  <p>{item.detail}</p>
-                  <Link to={item.href} className="text-link">
-                    {item.targetLabel}<ArrowUpRight aria-hidden="true" size={16} />
-                  </Link>
-                </div>
-              </article>
-            ))}
-          </div>
+          {snapshot.attention.length === 0 ? (
+            <div className="empty-next-card">
+              <Compass aria-hidden="true" size={28} />
+              <h2>没有需要你关注的事项</h2>
+              <p>当前工作区没有阻塞或等待决策的条目。你可以创建新的需求，或浏览需求账本查看整体进度。</p>
+              <div className="empty-next-actions">
+                <Link className="cta-button" to="/requirements/new"><Plus aria-hidden="true" size={16} />新建需求</Link>
+                <Link className="cta-button cta-button--outline" to="/projects">查看需求账本<ArrowUpRight aria-hidden="true" size={15} /></Link>
+              </div>
+            </div>
+          ) : (
+            <div className="attention-list">
+              {snapshot.attention.map((item, index) => (
+                <article key={item.id} className={`attention-item attention-item--${item.severity}`}>
+                  <span className="attention-index">0{index + 1}</span>
+                  <div>
+                    <p className="attention-kicker">
+                      {item.severity === "decision" ? "需要授权" : item.severity === "blocked" ? "流程阻塞" : "可以行动"}
+                    </p>
+                    <h3>{item.title}</h3>
+                    <p>{item.detail}</p>
+                    <Link to={item.href} className="text-link">
+                      {item.targetLabel}<ArrowUpRight aria-hidden="true" size={16} />
+                    </Link>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
 
         <aside className="panel pulse-panel" aria-labelledby="pulse-title">
