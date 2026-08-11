@@ -8,6 +8,8 @@ import {
 } from '@helm/core-domain';
 import { OptimisticConcurrencyError } from '@helm/audit-events';
 import { and, eq, inArray, type Database, schema } from '@helm/database';
+import { HumanGatePolicy, type HumanGate } from '@helm/review';
+import { PostgresReviewRepository } from '@helm/review/postgres';
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
 
@@ -37,7 +39,7 @@ const transitionBody = z.object({
   expectedGraphVersion: z.number().int().positive(),
 });
 const idempotencyHeaders = z.object({
-  'idempotency-key': z.string().trim().min(1),
+  'idempotency-key': z.string().trim().min(1).optional(),
   'x-actor-member-id': z.string().uuid().optional(),
   'x-command-source': z.string().trim().min(1).optional(),
 });
@@ -79,6 +81,8 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
   done,
 ) => {
   const { database } = options;
+  const reviewRepository = new PostgresReviewRepository(database);
+  const humanGatePolicy = new HumanGatePolicy(reviewRepository);
 
   server.post('/api/requirements/:id/work-graph', async (request, reply) => {
     const { id: requirementId } = uuidParams.parse(request.params);
@@ -103,7 +107,7 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
     const outcome = await executeAuditedCommand(database, {
       organizationId: requirement.organizationId,
       commandType: 'CreateWorkGraph',
-      idempotencyKey: headers['idempotency-key'],
+      idempotencyKey: headers['idempotency-key'] ?? request.id,
       actorMemberId: headers['x-actor-member-id'] ?? requirement.accountableHumanId,
       source: headers['x-command-source'] ?? 'human',
       payload: body,
@@ -227,7 +231,7 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
     const outcome = await executeAuditedCommand(database, {
       organizationId: metadata.organizationId,
       commandType: 'TransitionWorkItem',
-      idempotencyKey: headers['idempotency-key'],
+      idempotencyKey: headers['idempotency-key'] ?? request.id,
       actorMemberId: headers['x-actor-member-id'] ?? metadata.accountableHumanId,
       source: headers['x-command-source'] ?? 'human',
       payload: { ...body, expectedEntityVersion: headers['if-match'] },
@@ -275,9 +279,13 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
           ),
         );
         let dependenciesSatisfied = true;
+        let dependencyWorkItemIds: readonly string[] = [];
         if (dependencies.length > 0) {
           const completed = await tx
-          .select({ id: schema.workItems.id })
+            .select({
+              id: schema.workItems.id,
+              graphNodeId: schema.workItems.graphNodeId,
+            })
           .from(schema.workItems)
           .where(
             and(
@@ -286,8 +294,37 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
             ),
           );
           dependenciesSatisfied = completed.length === dependencies.length;
+          dependencyWorkItemIds = completed.map((dependency) => dependency.id);
         }
         assertWorkItemTransition(item.status, body.toStatus, dependenciesSatisfied);
+
+        if (body.toStatus === WorkItemStatus.Completed) {
+          const gates = (await reviewRepository.listGatesForWorkItem(id)).filter(
+            (gate) => gate.graphVersion === item.graphVersion,
+          );
+          const latestGate = gates.at(-1);
+          if (latestGate) {
+            await humanGatePolicy.assertReviewedWorkItemCanComplete({
+              gateId: latestGate.id,
+              workItemId: id,
+              graphVersion: item.graphVersion,
+            });
+          }
+        }
+
+        if (body.toStatus === WorkItemStatus.Ready && dependencyWorkItemIds.length > 0) {
+          const latestDependencyGates: HumanGate[] = [];
+          for (const dependencyId of dependencyWorkItemIds) {
+            const gates = (await reviewRepository.listGatesForWorkItem(dependencyId)).filter(
+              (gate) => gate.graphVersion === item.graphVersion,
+            );
+            const latestGate = gates.at(-1);
+            if (latestGate) latestDependencyGates.push(latestGate);
+          }
+          await humanGatePolicy.assertDownstreamCanBecomeReady(
+            latestDependencyGates.map((gate) => gate.id),
+          );
+        }
 
         const [updated] = await tx
         .update(schema.workItems)

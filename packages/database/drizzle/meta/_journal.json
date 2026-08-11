@@ -26,8 +26,29 @@
     {
       "idx": 3,
       "version": "7",
-      "when": 1786425600000,
-      "tag": "0003_audit_events",
+      "when": 1786423866111,
+      "tag": "0003_curly_kree",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786425076957,
+      "tag": "0004_lame_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786426645433,
+      "tag": "0005_bent_rocket_raccoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786426650000,
+      "tag": "0006_audit_events",
       "breakpoints": false
     }
   ]

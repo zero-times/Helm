@@ -22,18 +22,27 @@ Phase 0 domain package for Result review, Human gates, and explicit Rework.
 ## Composition
 
 `ReviewWorkflowService` reads completed attempts through the HELM-3
-`ExecutionRepository`. `InMemoryReviewRepository` is deterministic test
-infrastructure and coordinates creation of a new Execution with the Rework
-link. A production adapter must implement each repository mutation in one
-database transaction; `sql/002_review_gate.sql` supplies the storage-level
-constraints and immutability guards.
+`ExecutionRepository`. `InMemoryReviewRepository` remains deterministic test
+infrastructure, while `PostgresReviewRepository` persists Review, Gate, Rework,
+and the new Rework Execution in version-checked transactions. Migration
+`0004_lame_cerise.sql` supplies foreign keys, lifecycle checks, immutable fact
+guards, and deferred Review/Gate/Rework consistency constraints;
+`sql/002_review_gate.sql` remains the standalone domain contract reference.
 
-HELM-10 should call `HumanGatePolicy.assertReviewedWorkItemCanComplete` before
-the reviewed-node completion transition and
-`HumanGatePolicy.assertDownstreamCanBecomeReady` before deriving downstream
-readiness. Construction also requires a Rework start guard that checks the
-current WorkItem state and graph version, preventing production composition
-from silently falling back to a permissive policy.
+The Server Work Graph composition calls
+`HumanGatePolicy.assertReviewedWorkItemCanComplete` before reviewed-node
+completion and `HumanGatePolicy.assertDownstreamCanBecomeReady` before manual
+readiness transitions. PostgreSQL repeats both checks for direct writes. The
+Rework start path requires an `in_progress` WorkItem with a matching requested
+Rework, current graph version, and executor in the same organization.
+
+## Runtime API
+
+- `POST /api/executions/:id/reviews` requests Review and opens its Human Gate.
+- `POST /api/reviews/:id/approve` passes the Gate; `/reject` creates Rework.
+- `POST /api/rework-requests/:id/start` atomically starts a new Execution.
+- `GET /api/reviews/:id` and `GET /api/work-items/:id/reviews` expose current
+  decisions and immutable history.
 
 ## Verification
 

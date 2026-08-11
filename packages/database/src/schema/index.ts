@@ -11,3 +11,25 @@ export {
   workItems,
   workItemStatusEnum,
 } from './work-graph';
+export {
+  artifactKindEnum,
+  executionResults,
+  executionTestResults,
+  executionTestStatusEnum,
+  issueSeverityEnum,
+  manualExecutionModeEnum,
+  manualExecutions,
+  manualExecutionStatusEnum,
+  resultArtifacts,
+  resultKnownIssues,
+  testResultArtifacts,
+  verificationSourceEnum,
+} from './execution-result';
+export {
+  humanGates,
+  humanGateStatusEnum,
+  reviews,
+  reviewStatusEnum,
+  reworkRequests,
+  reworkStatusEnum,
+} from './review-gate';

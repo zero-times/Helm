@@ -1,6 +1,5 @@
 ALTER TABLE work_items
-  ADD COLUMN entity_version integer NOT NULL DEFAULT 1
-  CHECK (entity_version > 0);
+  ADD CONSTRAINT work_items_entity_version_positive CHECK (entity_version > 0);
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   organization_id text NOT NULL,
