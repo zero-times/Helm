@@ -1,0 +1,19 @@
+{
+  "name": "@helm/audit-events",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
