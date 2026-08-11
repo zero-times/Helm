@@ -12,6 +12,7 @@
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@helm/config": "workspace:*",
+    "@helm/bug-qa": "workspace:*",
     "@helm/contracts": "workspace:*",
     "@helm/core-domain": "workspace:*",
     "@helm/database": "workspace:*",

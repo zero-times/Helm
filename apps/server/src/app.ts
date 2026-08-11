@@ -3,6 +3,17 @@ import type { ServerConfig } from '@helm/config';
 import { DomainError } from '@helm/core-domain';
 import type { Database } from '@helm/database';
 import {
+  BugDomainError,
+  BugNotFoundError,
+  BugVersionConflictError,
+  DuplicateBugRecordError,
+  InvalidBugTransitionError,
+  InvalidQaRegressionTransitionError,
+  QaRegressionNotFoundError,
+  QaRegressionVersionConflictError,
+  RequirementBlockedByBugsError,
+} from '@helm/bug-qa';
+import {
   ExecutionDomainError,
   ExecutionNotFoundError,
   ExecutionVersionConflictError,
@@ -31,6 +42,7 @@ import Fastify, {
 import { ZodError } from 'zod';
 
 import { healthRoutes } from './routes/health';
+import { bugRoutes } from './routes/bugs';
 import { executionRoutes } from './routes/executions';
 import { memberRoutes } from './routes/members';
 import { organizationRoutes } from './routes/organizations';
@@ -71,6 +83,7 @@ export function buildApp(options: BuildAppOptions) {
   void server.register(workGraphRoutes, { database: options.database });
   void server.register(executionRoutes, { database: options.database });
   void server.register(reviewRoutes, { database: options.database });
+  void server.register(bugRoutes, { database: options.database });
 
   server.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'Request failed');
@@ -158,6 +171,40 @@ export function buildApp(options: BuildAppOptions) {
     }
 
     if (error instanceof ReviewDomainError) {
+      void reply.code(400).send({
+        error: error.name,
+        message: error.message,
+        requestId: request.id,
+      });
+      return;
+    }
+
+    if (error instanceof BugNotFoundError || error instanceof QaRegressionNotFoundError) {
+      void reply.code(404).send({
+        error: error.name,
+        message: error.message,
+        requestId: request.id,
+      });
+      return;
+    }
+
+    if (
+      error instanceof BugVersionConflictError ||
+      error instanceof QaRegressionVersionConflictError ||
+      error instanceof DuplicateBugRecordError ||
+      error instanceof InvalidBugTransitionError ||
+      error instanceof InvalidQaRegressionTransitionError ||
+      error instanceof RequirementBlockedByBugsError
+    ) {
+      void reply.code(409).send({
+        error: error.name,
+        message: error.message,
+        requestId: request.id,
+      });
+      return;
+    }
+
+    if (error instanceof BugDomainError) {
       void reply.code(400).send({
         error: error.name,
         message: error.message,

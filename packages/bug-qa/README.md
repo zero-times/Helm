@@ -17,6 +17,13 @@ free-form issue attached to a Result.
    regression records the failed edge and returns the Bug to `open`, preserving
    the release block and allowing another immutable fix attempt.
 
-Production adapters must implement every mutating repository method as one
-transaction and use optimistic versions. Apply `sql/003_bug_qa.sql` after the
-Execution/Result and Review/Gate migrations.
+`PostgresBugRepository` persists every compound state change atomically with
+optimistic versions. `PostgresPassedReviewGateReader` resolves the referenced
+Execution → Result → Review → passed Human Gate chain before a fix can enter
+QA. The Server exposes Bug creation/query, fix submission, regression
+completion, and Requirement release-gate endpoints under `/api`.
+
+The production schema is part of the unified Drizzle chain in migration
+`0005_messy_sister_grimm.sql`. It adds foreign keys, immutable edge triggers,
+deferred Bug/QA consistency checks, and Requirement status synchronization.
+The standalone `sql/003_bug_qa.sql` remains a domain-level reference only.

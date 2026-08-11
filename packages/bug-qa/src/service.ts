@@ -48,8 +48,12 @@ export class BugQaWorkflowService {
     const current = await this.#getBug(input.bugId);
     await this.reviewGates.assertReviewedWorkItemCanComplete({
       gateId: input.passedGateId,
-      workItemId: current.id,
+      bugId: current.id,
+      sourceRequirementId: current.sourceRequirementId,
       graphVersion: current.graphVersion,
+      executionId: input.executionId,
+      resultId: input.resultId,
+      reviewId: input.reviewId,
     });
     const submitted = submitFixForQa(current, input);
     await this.repository.submitFixForQa(
