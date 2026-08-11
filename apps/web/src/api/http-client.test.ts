@@ -98,6 +98,48 @@ describe("HttpHelmClient", () => {
       `/api/work-items/${workItemId}/transition`,
     ]);
   });
+
+  it("waits for review after a rework Result instead of reusing the rejected review", async () => {
+    installFetch({
+      executions: [
+        {
+          id: "00000000-0000-4000-8000-000000000010",
+          workItemId,
+          graphVersion: 1,
+          mode: "self",
+          status: "completed",
+          startedAt: "2026-08-11T01:00:00.000Z",
+          endedAt: "2026-08-11T01:05:00.000Z",
+          version: 2,
+        },
+        {
+          id: executionId,
+          workItemId,
+          graphVersion: 1,
+          mode: "self",
+          status: "completed",
+          startedAt: "2026-08-11T01:06:00.000Z",
+          endedAt: "2026-08-11T01:10:00.000Z",
+          version: 2,
+        },
+      ],
+      reviews: [{
+        id: "00000000-0000-4000-8000-000000000011",
+        executionId: "00000000-0000-4000-8000-000000000010",
+        status: "rejected",
+        version: 2,
+      }],
+      reworks: [{
+        id: "00000000-0000-4000-8000-000000000012",
+        status: "started",
+        version: 2,
+      }],
+    });
+
+    const snapshot = await new HttpHelmClient("http://helm.test").loadWorkspace();
+
+    expect(snapshot.workItems[0]?.status).toBe("waiting_review");
+  });
 });
 
 function installFetch(state: BackendState = {}) {

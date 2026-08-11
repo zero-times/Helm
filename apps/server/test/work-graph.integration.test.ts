@@ -14,8 +14,7 @@ const server = buildApp({
   database: connection.database,
   logger: false,
 });
-let organizationId: string | undefined;
-let projectId: string | undefined;
+const organizationIds: string[] = [];
 
 beforeAll(async () => {
   await migrateDatabase(connection.database);
@@ -23,15 +22,24 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (organizationId) {
-    if (projectId) {
+  // Graph-only orgs carry no immutable Execution or Review facts, so their
+  // rows can be removed; Execution/Review/Bug orgs are append-only by design.
+  for (const organizationId of organizationIds) {
+    const projects = await connection.database
+      .select({ id: schema.projects.id })
+      .from(schema.projects)
+      .where(eq(schema.projects.organizationId, organizationId));
+    for (const project of projects) {
       await connection.database
         .delete(schema.requirements)
-        .where(eq(schema.requirements.projectId, projectId));
+        .where(eq(schema.requirements.projectId, project.id));
     }
     await connection.database
       .delete(schema.projects)
       .where(eq(schema.projects.organizationId, organizationId));
+    await connection.database
+      .delete(schema.roleAssignments)
+      .where(eq(schema.roleAssignments.organizationId, organizationId));
     await connection.database
       .delete(schema.members)
       .where(eq(schema.members.organizationId, organizationId));
@@ -51,7 +59,8 @@ describe('minimal work graph', () => {
       .values({ name: 'Graph Org', slug: `graph-${suffix}` })
       .returning();
     if (!organization) throw new Error('organization was not created');
-    organizationId = organization.id;
+    organizationIds.push(organization.id);
+    const organizationId = organization.id;
     const [human] = await connection.database
       .insert(schema.members)
       .values({ organizationId, memberType: 'human', name: 'Owner' })
@@ -68,7 +77,6 @@ describe('minimal work graph', () => {
       })
       .returning();
     if (!project) throw new Error('project was not created');
-    projectId = project.id;
     const [requirement] = await connection.database
       .insert(schema.requirements)
       .values({
@@ -232,5 +240,258 @@ describe('minimal work graph', () => {
         .set({ status: 'blocked' })
         .where(eq(schema.requirements.id, requirement.id)),
     ).rejects.toThrow();
+  });
+});
+
+describe('cancellation propagation', () => {
+  it('cancels reachable unfinished hard-dependency descendants and derives the requirement as canceled', async () => {
+    const suffix = randomUUID();
+    const [organization] = await connection.database
+      .insert(schema.organizations)
+      .values({ name: 'Cancel Org', slug: `cancel-${suffix}` })
+      .returning();
+    if (!organization) throw new Error('organization was not created');
+    organizationIds.push(organization.id);
+    const organizationId = organization.id;
+    const [human] = await connection.database
+      .insert(schema.members)
+      .values({ organizationId, memberType: 'human', name: 'Cancel Owner' })
+      .returning();
+    if (!human) throw new Error('human was not created');
+    const [project] = await connection.database
+      .insert(schema.projects)
+      .values({
+        organizationId,
+        name: 'Cancel Project',
+        slug: `cancel-${suffix}`,
+        accountableHumanId: human.id,
+        operationalOwnerId: human.id,
+      })
+      .returning();
+    if (!project) throw new Error('project was not created');
+    const [requirement] = await connection.database
+      .insert(schema.requirements)
+      .values({
+        projectId: project.id,
+        goal: 'Cancel an obsolete branch',
+        acceptanceCriteria: ['Downstream hard dependencies are canceled'],
+        accountableHumanId: human.id,
+        operationalOwnerId: human.id,
+        assigneeMemberId: human.id,
+      })
+      .returning();
+    if (!requirement) throw new Error('requirement was not created');
+
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+      headers: { 'idempotency-key': `create-cancel-graph-${suffix}` },
+      payload: {
+        nodes: [
+          { key: 'plan', title: 'Plan' },
+          { key: 'build', title: 'Build' },
+          { key: 'release', title: 'Release' },
+          { key: 'extra', title: 'Soft Extra', isRequired: false },
+        ],
+        edges: [
+          { sourceKey: 'plan', targetKey: 'build' },
+          { sourceKey: 'build', targetKey: 'release' },
+          { sourceKey: 'plan', targetKey: 'extra', isHardDependency: false },
+        ],
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+
+    const graphResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+    });
+    expect(graphResponse.statusCode).toBe(200);
+    const graph = graphResponse.json<{
+      graphVersion: number;
+      nodes: Array<{ key: string; workItemId: string; entityVersion: number }>;
+    }>();
+    const plan = graph.nodes.find((node) => node.key === 'plan');
+    const build = graph.nodes.find((node) => node.key === 'build');
+    const release = graph.nodes.find((node) => node.key === 'release');
+    const extra = graph.nodes.find((node) => node.key === 'extra');
+    if (!plan || !build || !release || !extra) throw new Error('graph nodes were not created');
+
+    // Root nodes start ready, so cancel the plan from in_progress.
+    const inProgress = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${plan.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `plan-in_progress-${suffix}`,
+        'if-match': String(plan.entityVersion),
+      },
+      payload: { toStatus: 'in_progress', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(inProgress.statusCode, inProgress.body).toBe(200);
+
+    const canceled = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${plan.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `cancel-plan-${suffix}`,
+        'if-match': String(plan.entityVersion + 1),
+      },
+      payload: { toStatus: 'canceled', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(canceled.statusCode, canceled.body).toBe(200);
+    const canceledBody = canceled.json<{
+      status: string;
+      canceledDescendantWorkItemIds: string[];
+    }>();
+    expect(canceledBody.status).toBe('canceled');
+    expect(canceledBody.canceledDescendantWorkItemIds).toHaveLength(2);
+    expect(canceledBody.canceledDescendantWorkItemIds).toEqual(
+      expect.arrayContaining([build.workItemId, release.workItemId]),
+    );
+    expect(canceledBody.canceledDescendantWorkItemIds).not.toContain(extra.workItemId);
+
+    const finalGraphResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+    });
+    expect(finalGraphResponse.statusCode).toBe(200);
+    const statusByKey = new Map(
+      finalGraphResponse
+        .json<{ nodes: Array<{ key: string; status: string }> }>()
+        .nodes.map((node) => [node.key, node.status]),
+    );
+    expect(statusByKey.get('plan')).toBe('canceled');
+    expect(statusByKey.get('build')).toBe('canceled');
+    expect(statusByKey.get('release')).toBe('canceled');
+    expect(statusByKey.get('extra')).toBe('ready');
+
+    const requirementResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}`,
+    });
+    expect(requirementResponse.statusCode).toBe(200);
+    expect(requirementResponse.json<{ status: string }>().status).toBe('canceled');
+  });
+
+  it('skips descendants that are already canceled and does not bump their version', async () => {
+    const suffix = randomUUID();
+    const [organization] = await connection.database
+      .insert(schema.organizations)
+      .values({ name: 'Cancel Skip Org', slug: `cancel-skip-${suffix}` })
+      .returning();
+    if (!organization) throw new Error('organization was not created');
+    organizationIds.push(organization.id);
+    const organizationId = organization.id;
+    const [human] = await connection.database
+      .insert(schema.members)
+      .values({ organizationId, memberType: 'human', name: 'Cancel Skip Owner' })
+      .returning();
+    if (!human) throw new Error('human was not created');
+    const [project] = await connection.database
+      .insert(schema.projects)
+      .values({
+        organizationId,
+        name: 'Cancel Skip Project',
+        slug: `cancel-skip-${suffix}`,
+        accountableHumanId: human.id,
+        operationalOwnerId: human.id,
+      })
+      .returning();
+    if (!project) throw new Error('project was not created');
+    const [requirement] = await connection.database
+      .insert(schema.requirements)
+      .values({
+        projectId: project.id,
+        goal: 'Cancel a partially canceled graph',
+        acceptanceCriteria: ['Already canceled descendants stay untouched'],
+        accountableHumanId: human.id,
+        operationalOwnerId: human.id,
+        assigneeMemberId: human.id,
+      })
+      .returning();
+    if (!requirement) throw new Error('requirement was not created');
+
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+      headers: { 'idempotency-key': `create-cancel-skip-graph-${suffix}` },
+      payload: {
+        nodes: [
+          { key: 'a', title: 'A' },
+          { key: 'b', title: 'B' },
+          { key: 'c', title: 'C' },
+        ],
+        edges: [
+          { sourceKey: 'a', targetKey: 'b' },
+          { sourceKey: 'b', targetKey: 'c' },
+        ],
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+
+    const graphResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+    });
+    expect(graphResponse.statusCode).toBe(200);
+    const graph = graphResponse.json<{
+      graphVersion: number;
+      nodes: Array<{ key: string; workItemId: string; entityVersion: number }>;
+    }>();
+    const nodeA = graph.nodes.find((node) => node.key === 'a');
+    const nodeB = graph.nodes.find((node) => node.key === 'b');
+    const nodeC = graph.nodes.find((node) => node.key === 'c');
+    if (!nodeA || !nodeB || !nodeC) throw new Error('graph nodes were not created');
+
+    const cancelB = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${nodeB.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `cancel-b-${suffix}`,
+        'if-match': String(nodeB.entityVersion),
+      },
+      payload: { toStatus: 'canceled', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(cancelB.statusCode, cancelB.body).toBe(200);
+    expect(
+      cancelB.json<{ canceledDescendantWorkItemIds: string[] }>().canceledDescendantWorkItemIds,
+    ).toEqual([nodeC.workItemId]);
+
+    const cancelA = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${nodeA.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `cancel-a-${suffix}`,
+        'if-match': String(nodeA.entityVersion),
+      },
+      payload: { toStatus: 'canceled', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(cancelA.statusCode, cancelA.body).toBe(200);
+    expect(
+      cancelA.json<{ canceledDescendantWorkItemIds: string[] }>().canceledDescendantWorkItemIds,
+    ).toHaveLength(0);
+
+    const finalGraphResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+    });
+    expect(finalGraphResponse.statusCode).toBe(200);
+    const finalNodes = finalGraphResponse.json<{
+      nodes: Array<{ key: string; status: string; entityVersion: number }>;
+    }>().nodes;
+    const finalA = finalNodes.find((node) => node.key === 'a');
+    const finalB = finalNodes.find((node) => node.key === 'b');
+    const finalC = finalNodes.find((node) => node.key === 'c');
+    expect(finalA?.status).toBe('canceled');
+    expect(finalB?.status).toBe('canceled');
+    expect(finalB?.entityVersion).toBe(nodeB.entityVersion + 1);
+    expect(finalC?.status).toBe('canceled');
+
+    const requirementResponse = await server.inject({
+      method: 'GET',
+      url: `/api/requirements/${requirement.id}`,
+    });
+    expect(requirementResponse.statusCode).toBe(200);
+    expect(requirementResponse.json<{ status: string }>().status).toBe('canceled');
   });
 });

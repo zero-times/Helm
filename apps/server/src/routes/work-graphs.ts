@@ -350,11 +350,89 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
             'work_item', id, headers['if-match'], current[0]?.entityVersion ?? item.entityVersion,
           );
         }
+
+        const canceledDescendantWorkItemIds: string[] = [];
+        if (body.toStatus === WorkItemStatus.Canceled) {
+          const graphNodes = await tx
+            .select({
+              nodeId: schema.graphNodes.id,
+              workItemId: schema.workItems.id,
+              status: schema.workItems.status,
+              entityVersion: schema.workItems.entityVersion,
+            })
+            .from(schema.graphNodes)
+            .innerJoin(
+              schema.workItems,
+              eq(schema.workItems.graphNodeId, schema.graphNodes.id),
+            )
+            .where(eq(schema.graphNodes.graphId, item.graphId));
+          const graphEdges = await tx
+            .select({
+              sourceNodeId: schema.workEdges.sourceNodeId,
+              targetNodeId: schema.workEdges.targetNodeId,
+            })
+            .from(schema.workEdges)
+            .where(
+              and(
+                eq(schema.workEdges.graphId, item.graphId),
+                eq(schema.workEdges.isHardDependency, true),
+              ),
+            );
+          const targetsBySource = new Map<string, string[]>();
+          for (const edge of graphEdges) {
+            targetsBySource.set(edge.sourceNodeId, [
+              ...(targetsBySource.get(edge.sourceNodeId) ?? []),
+              edge.targetNodeId,
+            ]);
+          }
+          const descendantNodeIds = new Set<string>();
+          const queue = [...(targetsBySource.get(item.graphNodeId) ?? [])];
+          while (queue.length > 0) {
+            const nodeId = queue.shift();
+            if (!nodeId || descendantNodeIds.has(nodeId)) continue;
+            descendantNodeIds.add(nodeId);
+            queue.push(...(targetsBySource.get(nodeId) ?? []));
+          }
+
+          for (const descendant of graphNodes) {
+            if (
+              !descendantNodeIds.has(descendant.nodeId) ||
+              descendant.status === WorkItemStatus.Completed ||
+              descendant.status === WorkItemStatus.Canceled
+            ) {
+              continue;
+            }
+            const [canceled] = await tx
+              .update(schema.workItems)
+              .set({
+                status: WorkItemStatus.Canceled,
+                entityVersion: descendant.entityVersion + 1,
+                updatedAt: new Date(),
+              })
+              .where(
+                and(
+                  eq(schema.workItems.id, descendant.workItemId),
+                  eq(schema.workItems.entityVersion, descendant.entityVersion),
+                ),
+              )
+              .returning({ id: schema.workItems.id });
+            if (!canceled) {
+              throw new OptimisticConcurrencyError(
+                'work_item',
+                descendant.workItemId,
+                descendant.entityVersion,
+                descendant.entityVersion + 1,
+              );
+            }
+            canceledDescendantWorkItemIds.push(canceled.id);
+          }
+        }
         return {
           result: {
             ...updated,
             createdAt: updated.createdAt.toISOString(),
             updatedAt: updated.updatedAt.toISOString(),
+            canceledDescendantWorkItemIds,
           },
           entityVersion: updated.entityVersion,
         };

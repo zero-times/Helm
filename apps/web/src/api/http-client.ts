@@ -517,7 +517,9 @@ function mapRequirementStatus(
 function deriveWorkItemStatus(context: WorkItemApiContext): WorkItemStatus {
   if ([...context.reworks].reverse().some((rework) => rework.status === "requested")) return "rework";
   const latestExecution = context.executions.at(-1);
-  const latestReview = context.reviews.at(-1);
+  const latestReview = [...context.reviews]
+    .reverse()
+    .find((review) => review.executionId === latestExecution?.id);
   if (latestExecution?.status === "running" || latestExecution?.status === "waiting_for_input") return "running";
   if (latestExecution?.status === "completed" && (!latestReview || latestReview.status === "pending")) return "waiting_review";
   if (context.node.status === "pending") return "draft";
