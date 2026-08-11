@@ -18,10 +18,20 @@ Phase 0 domain package for Human Self and External/Manual execution attempts.
 
 ## Work Graph integration
 
-`ManualExecutionService` accepts a `ManualExecutionStartGuard`. The HELM-10
-composition must inject a guard that verifies the WorkItem is `ready` and that
-the requested `graphVersion` is current. Keeping that rule behind a port lets
-this package remain independently testable while preserving the dependency.
+`ManualExecutionService` accepts a `ManualExecutionStartGuard`. The Server
+composition injects a PostgreSQL-backed guard that verifies the WorkItem is
+`ready`, the requested `graphVersion` is current, and the executor belongs to
+the WorkItem organization. A database trigger repeats the readiness/version
+check under a row lock so callers cannot bypass it or race a state transition.
+
+## Runtime API
+
+- `POST /api/work-items/:id/executions` starts a Self or External/Manual attempt.
+- `POST /api/executions/:id/wait-for-input` and `/resume` update active attempts.
+- `POST /api/executions/:id/finish` atomically writes a terminal Execution and
+  its structured Result.
+- `GET /api/executions/:id`, `/api/executions/:id/result`, and
+  `GET /api/work-items/:id/executions` expose individual facts and full history.
 
 ## Verification
 
@@ -32,7 +42,7 @@ node --test test/*.test.ts
 pnpm typecheck
 ```
 
-`sql/001_execution_result.sql` is the PostgreSQL persistence contract. The
-foundation integration should run it through the repository's migration runner
-and add foreign keys from `work_item_id` and `executor_member_id` after the
-HELM-10 and HELM-4 table names are finalized.
+The executable PostgreSQL schema, foreign keys, lifecycle triggers, immutable
+fact triggers, and deferred Result-count checks live in database migration
+`0003_curly_kree.sql`. `sql/001_execution_result.sql` remains the standalone
+domain contract reference.

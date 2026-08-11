@@ -20,8 +20,12 @@ import {
   type TestResultReference,
 } from "./types.ts";
 
+function isJsonArray(value: JsonValue): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
 function cloneJsonValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
+  if (isJsonArray(value)) {
     return Object.freeze(value.map((item) => cloneJsonValue(item)));
   }
   if (value !== null && typeof value === "object") {
@@ -72,18 +76,17 @@ function normalizeArtifact(input: ArtifactReferenceInput): ArtifactReference {
       ]),
     ),
   );
+  if (input.digest && String(input.digest.algorithm) !== "sha256") {
+    throw new DomainValidationError(
+      `Unsupported artifact digest algorithm: ${String(input.digest.algorithm)}`,
+    );
+  }
   const digest = input.digest
     ? Object.freeze({
         algorithm: input.digest.algorithm,
         value: requireNonBlank(input.digest.value, "artifact.digest.value"),
       })
     : null;
-  if (digest && digest.algorithm !== "sha256") {
-    throw new DomainValidationError(
-      `Unsupported artifact digest algorithm: ${digest.algorithm}`,
-    );
-  }
-
   return Object.freeze({
     id: requireNonBlank(input.id, "artifact.id"),
     kind: input.kind,
