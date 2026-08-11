@@ -1,12 +1,17 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   ConflictError,
   NotFoundError,
   WorkItemStatus,
   assertWorkItemTransition,
 } from '@helm/core-domain';
+import { OptimisticConcurrencyError } from '@helm/audit-events';
 import { and, eq, inArray, type Database, schema } from '@helm/database';
 import type { FastifyPluginCallback } from 'fastify';
 import { z } from 'zod';
+
+import { executeAuditedCommand } from '../audited-command';
 
 const uuidParams = z.object({ id: z.string().uuid() });
 const createGraphBody = z.object({
@@ -30,6 +35,14 @@ const createGraphBody = z.object({
 const transitionBody = z.object({
   toStatus: z.enum(['ready', 'in_progress', 'completed', 'failed', 'canceled']),
   expectedGraphVersion: z.number().int().positive(),
+});
+const idempotencyHeaders = z.object({
+  'idempotency-key': z.string().trim().min(1),
+  'x-actor-member-id': z.string().uuid().optional(),
+  'x-command-source': z.string().trim().min(1).optional(),
+});
+const transitionHeaders = idempotencyHeaders.extend({
+  'if-match': z.coerce.number().int().positive(),
 });
 
 export interface WorkGraphRoutesOptions {
@@ -70,56 +83,95 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
   server.post('/api/requirements/:id/work-graph', async (request, reply) => {
     const { id: requirementId } = uuidParams.parse(request.params);
     const body = createGraphBody.parse(request.body);
+    const headers = idempotencyHeaders.parse(request.headers);
     validateDefinition(body);
 
-    const graph = await database.transaction(async (tx) => {
-      const existingRequirement = await tx
+    const requirements = await database
+      .select({
+        id: schema.requirements.id,
+        organizationId: schema.projects.organizationId,
+        accountableHumanId: schema.requirements.accountableHumanId,
+      })
+      .from(schema.requirements)
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.requirements.projectId))
+      .where(eq(schema.requirements.id, requirementId))
+      .limit(1);
+    const requirement = requirements[0];
+    if (!requirement) throw new NotFoundError('Requirement', requirementId);
+    const graphId = randomUUID();
+
+    const outcome = await executeAuditedCommand(database, {
+      organizationId: requirement.organizationId,
+      commandType: 'CreateWorkGraph',
+      idempotencyKey: headers['idempotency-key'],
+      actorMemberId: headers['x-actor-member-id'] ?? requirement.accountableHumanId,
+      source: headers['x-command-source'] ?? 'human',
+      payload: body,
+      entityType: 'work_graph',
+      entityId: graphId,
+      eventType: 'WorkGraph.Created',
+      category: 'state_change',
+      summary: 'Work graph created',
+      details: { requirementId, nodeCount: body.nodes.length, edgeCount: body.edges.length },
+      mutate: async (tx) => {
+        const existingRequirement = await tx
         .select({ id: schema.requirements.id })
         .from(schema.requirements)
         .where(eq(schema.requirements.id, requirementId))
         .limit(1);
-      if (!existingRequirement[0]) throw new NotFoundError('Requirement', requirementId);
+        if (!existingRequirement[0]) throw new NotFoundError('Requirement', requirementId);
 
-      const [createdGraph] = await tx
+        const [createdGraph] = await tx
         .insert(schema.workGraphs)
-        .values({ requirementId })
+        .values({ id: graphId, requirementId })
         .returning();
-      if (!createdGraph) throw new Error('Failed to create work graph');
+        if (!createdGraph) throw new Error('Failed to create work graph');
 
-      const nodes = await tx
+        const nodes = await tx
         .insert(schema.graphNodes)
         .values(body.nodes.map((node) => ({ ...node, graphId: createdGraph.id })))
         .returning();
-      const nodeByKey = new Map(nodes.map((node) => [node.key, node]));
-      await tx.insert(schema.workItems).values(
-        nodes.map((node) => ({ graphNodeId: node.id, status: WorkItemStatus.Pending })),
-      );
-
-      if (body.edges.length > 0) {
-        await tx.insert(schema.workEdges).values(
-          body.edges.map((edge) => ({
-            graphId: createdGraph.id,
-            sourceNodeId: nodeByKey.get(edge.sourceKey)!.id,
-            targetNodeId: nodeByKey.get(edge.targetKey)!.id,
-            isHardDependency: edge.isHardDependency,
-          })),
+        const nodeByKey = new Map(nodes.map((node) => [node.key, node]));
+        await tx.insert(schema.workItems).values(
+          nodes.map((node) => ({ graphNodeId: node.id, status: WorkItemStatus.Pending })),
         );
-      }
-      const hardTargets = new Set(
-        body.edges.filter((edge) => edge.isHardDependency).map((edge) => edge.targetKey),
-      );
-      const roots = nodes.filter((node) => !hardTargets.has(node.key));
-      if (roots.length > 0) {
-        await tx
-          .update(schema.workItems)
-          .set({ status: WorkItemStatus.Ready, updatedAt: new Date() })
-          .where(inArray(schema.workItems.graphNodeId, roots.map((node) => node.id)));
-      }
-      return createdGraph;
+
+        if (body.edges.length > 0) {
+          await tx.insert(schema.workEdges).values(
+            body.edges.map((edge) => ({
+              graphId: createdGraph.id,
+              sourceNodeId: nodeByKey.get(edge.sourceKey)!.id,
+              targetNodeId: nodeByKey.get(edge.targetKey)!.id,
+              isHardDependency: edge.isHardDependency,
+            })),
+          );
+        }
+        const hardTargets = new Set(
+          body.edges.filter((edge) => edge.isHardDependency).map((edge) => edge.targetKey),
+        );
+        const roots = nodes.filter((node) => !hardTargets.has(node.key));
+        if (roots.length > 0) {
+          await tx
+            .update(schema.workItems)
+            .set({ status: WorkItemStatus.Ready, updatedAt: new Date() })
+            .where(inArray(schema.workItems.graphNodeId, roots.map((node) => node.id)));
+        }
+        return {
+          result: {
+            id: createdGraph.id,
+            requirementId: createdGraph.requirementId,
+            graphVersion: createdGraph.graphVersion,
+            createdAt: createdGraph.createdAt.toISOString(),
+            updatedAt: createdGraph.updatedAt.toISOString(),
+          },
+          entityVersion: createdGraph.graphVersion,
+        };
+      },
     });
 
+    void reply.header('Idempotency-Replayed', String(outcome.replayed));
     void reply.code(201);
-    return graph;
+    return outcome.result;
   });
 
   server.get('/api/requirements/:id/work-graph', async (request) => {
@@ -139,6 +191,7 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
         isRequired: schema.graphNodes.isRequired,
         workItemId: schema.workItems.id,
         status: schema.workItems.status,
+        entityVersion: schema.workItems.entityVersion,
       })
       .from(schema.graphNodes)
       .innerJoin(schema.workItems, eq(schema.workItems.graphNodeId, schema.graphNodes.id))
@@ -153,28 +206,66 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
   server.post('/api/work-items/:id/transition', async (request) => {
     const { id } = uuidParams.parse(request.params);
     const body = transitionBody.parse(request.body);
+    const headers = transitionHeaders.parse(request.headers);
 
-    return database.transaction(async (tx) => {
-      const rows = await tx
+    const metadataRows = await database
+      .select({
+        organizationId: schema.projects.organizationId,
+        accountableHumanId: schema.requirements.accountableHumanId,
+        graphVersion: schema.workGraphs.graphVersion,
+      })
+      .from(schema.workItems)
+      .innerJoin(schema.graphNodes, eq(schema.graphNodes.id, schema.workItems.graphNodeId))
+      .innerJoin(schema.workGraphs, eq(schema.workGraphs.id, schema.graphNodes.graphId))
+      .innerJoin(schema.requirements, eq(schema.requirements.id, schema.workGraphs.requirementId))
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.requirements.projectId))
+      .where(eq(schema.workItems.id, id))
+      .limit(1);
+    const metadata = metadataRows[0];
+    if (!metadata) throw new NotFoundError('WorkItem', id);
+
+    const outcome = await executeAuditedCommand(database, {
+      organizationId: metadata.organizationId,
+      commandType: 'TransitionWorkItem',
+      idempotencyKey: headers['idempotency-key'],
+      actorMemberId: headers['x-actor-member-id'] ?? metadata.accountableHumanId,
+      source: headers['x-command-source'] ?? 'human',
+      payload: { ...body, expectedEntityVersion: headers['if-match'] },
+      entityType: 'work_item',
+      entityId: id,
+      workItemId: id,
+      graphVersion: metadata.graphVersion,
+      eventType: 'WorkItem.StateChanged',
+      category: 'state_change',
+      summary: `Work item changed to ${body.toStatus}`,
+      details: { toStatus: body.toStatus },
+      mutate: async (tx) => {
+        const rows = await tx
         .select({
           id: schema.workItems.id,
           status: schema.workItems.status,
           graphNodeId: schema.workItems.graphNodeId,
           graphId: schema.graphNodes.graphId,
           graphVersion: schema.workGraphs.graphVersion,
+          entityVersion: schema.workItems.entityVersion,
         })
         .from(schema.workItems)
         .innerJoin(schema.graphNodes, eq(schema.graphNodes.id, schema.workItems.graphNodeId))
         .innerJoin(schema.workGraphs, eq(schema.workGraphs.id, schema.graphNodes.graphId))
         .where(eq(schema.workItems.id, id))
         .limit(1);
-      const item = rows[0];
-      if (!item) throw new NotFoundError('WorkItem', id);
-      if (item.graphVersion !== body.expectedGraphVersion) {
-        throw new ConflictError(`Expected graph version ${body.expectedGraphVersion}, got ${item.graphVersion}`);
-      }
+        const item = rows[0];
+        if (!item) throw new NotFoundError('WorkItem', id);
+        if (item.graphVersion !== body.expectedGraphVersion) {
+          throw new ConflictError(`Expected graph version ${body.expectedGraphVersion}, got ${item.graphVersion}`);
+        }
+        if (item.entityVersion !== headers['if-match']) {
+          throw new OptimisticConcurrencyError(
+            'work_item', id, headers['if-match'], item.entityVersion,
+          );
+        }
 
-      const dependencies = await tx
+        const dependencies = await tx
         .select({ sourceNodeId: schema.workEdges.sourceNodeId })
         .from(schema.workEdges)
         .where(
@@ -183,9 +274,9 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
             eq(schema.workEdges.isHardDependency, true),
           ),
         );
-      let dependenciesSatisfied = true;
-      if (dependencies.length > 0) {
-        const completed = await tx
+        let dependenciesSatisfied = true;
+        if (dependencies.length > 0) {
+          const completed = await tx
           .select({ id: schema.workItems.id })
           .from(schema.workItems)
           .where(
@@ -194,17 +285,45 @@ export const workGraphRoutes: FastifyPluginCallback<WorkGraphRoutesOptions> = (
               eq(schema.workItems.status, WorkItemStatus.Completed),
             ),
           );
-        dependenciesSatisfied = completed.length === dependencies.length;
-      }
-      assertWorkItemTransition(item.status, body.toStatus, dependenciesSatisfied);
+          dependenciesSatisfied = completed.length === dependencies.length;
+        }
+        assertWorkItemTransition(item.status, body.toStatus, dependenciesSatisfied);
 
-      const [updated] = await tx
+        const [updated] = await tx
         .update(schema.workItems)
-        .set({ status: body.toStatus, updatedAt: new Date() })
-        .where(eq(schema.workItems.id, id))
+        .set({
+          status: body.toStatus,
+          entityVersion: item.entityVersion + 1,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.workItems.id, id),
+            eq(schema.workItems.entityVersion, headers['if-match']),
+          ),
+        )
         .returning();
-      return updated;
+        if (!updated) {
+          const current = await tx
+            .select({ entityVersion: schema.workItems.entityVersion })
+            .from(schema.workItems)
+            .where(eq(schema.workItems.id, id))
+            .limit(1);
+          throw new OptimisticConcurrencyError(
+            'work_item', id, headers['if-match'], current[0]?.entityVersion ?? item.entityVersion,
+          );
+        }
+        return {
+          result: {
+            ...updated,
+            createdAt: updated.createdAt.toISOString(),
+            updatedAt: updated.updatedAt.toISOString(),
+          },
+          entityVersion: updated.entityVersion,
+        };
+      },
     });
+    return outcome.result;
   });
 
   done();

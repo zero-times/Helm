@@ -85,6 +85,7 @@ describe('minimal work graph', () => {
     const created = await server.inject({
       method: 'POST',
       url: `/api/requirements/${requirement.id}/work-graph`,
+      headers: { 'idempotency-key': `create-graph-${suffix}` },
       payload: {
         nodes: [
           { key: 'implement', title: 'Implement', isRequired: true },
@@ -93,7 +94,23 @@ describe('minimal work graph', () => {
         edges: [{ sourceKey: 'implement', targetKey: 'verify' }],
       },
     });
-    expect(created.statusCode).toBe(201);
+    expect(created.statusCode, created.body).toBe(201);
+
+    const replayed = await server.inject({
+      method: 'POST',
+      url: `/api/requirements/${requirement.id}/work-graph`,
+      headers: { 'idempotency-key': `create-graph-${suffix}` },
+      payload: {
+        nodes: [
+          { key: 'implement', title: 'Implement', isRequired: true },
+          { key: 'verify', title: 'Verify', isRequired: true },
+        ],
+        edges: [{ sourceKey: 'implement', targetKey: 'verify' }],
+      },
+    });
+    expect(replayed.statusCode).toBe(201);
+    expect(replayed.headers['idempotency-replayed']).toBe('true');
+    expect(replayed.json()).toEqual(created.json());
 
     const graphResponse = await server.inject({
       method: 'GET',
@@ -102,7 +119,12 @@ describe('minimal work graph', () => {
     expect(graphResponse.statusCode).toBe(200);
     const graph = graphResponse.json<{
       graphVersion: number;
-      nodes: Array<{ key: string; workItemId: string; status: string }>;
+      nodes: Array<{
+        key: string;
+        workItemId: string;
+        status: string;
+        entityVersion: number;
+      }>;
     }>();
     const implement = graph.nodes.find((node) => node.key === 'implement');
     const verify = graph.nodes.find((node) => node.key === 'verify');
@@ -112,19 +134,41 @@ describe('minimal work graph', () => {
     const premature = await server.inject({
       method: 'POST',
       url: `/api/work-items/${verify!.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `premature-${suffix}`,
+        'if-match': '1',
+      },
       payload: { toStatus: 'ready', expectedGraphVersion: graph.graphVersion },
     });
     expect(premature.statusCode).toBe(409);
     expect(premature.json()).toMatchObject({ error: 'DEPENDENCY_NOT_SATISFIED' });
 
+    let implementVersion = implement!.entityVersion;
     for (const toStatus of ['in_progress', 'completed']) {
       const response = await server.inject({
         method: 'POST',
         url: `/api/work-items/${implement!.workItemId}/transition`,
+        headers: {
+          'idempotency-key': `implement-${toStatus}-${suffix}`,
+          'if-match': String(implementVersion),
+        },
         payload: { toStatus, expectedGraphVersion: graph.graphVersion },
       });
       expect(response.statusCode).toBe(200);
+      implementVersion += 1;
     }
+
+    const stale = await server.inject({
+      method: 'POST',
+      url: `/api/work-items/${implement!.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `stale-${suffix}`,
+        'if-match': '1',
+      },
+      payload: { toStatus: 'failed', expectedGraphVersion: graph.graphVersion },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: 'OPTIMISTIC_CONCURRENCY_CONFLICT' });
 
     const advanced = await server.inject({
       method: 'GET',
@@ -136,6 +180,10 @@ describe('minimal work graph', () => {
     const illegal = await server.inject({
       method: 'POST',
       url: `/api/work-items/${implement!.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `illegal-${suffix}`,
+        'if-match': String(implementVersion),
+      },
       payload: { toStatus: 'in_progress', expectedGraphVersion: graph.graphVersion },
     });
     expect(illegal.statusCode).toBe(409);
@@ -144,11 +192,19 @@ describe('minimal work graph', () => {
     await server.inject({
       method: 'POST',
       url: `/api/work-items/${verify!.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `verify-start-${suffix}`,
+        'if-match': '1',
+      },
       payload: { toStatus: 'in_progress', expectedGraphVersion: graph.graphVersion },
     });
     await server.inject({
       method: 'POST',
       url: `/api/work-items/${verify!.workItemId}/transition`,
+      headers: {
+        'idempotency-key': `verify-complete-${suffix}`,
+        'if-match': '2',
+      },
       payload: { toStatus: 'completed', expectedGraphVersion: graph.graphVersion },
     });
     const [completedRequirement] = await connection.database
@@ -156,6 +212,19 @@ describe('minimal work graph', () => {
       .from(schema.requirements)
       .where(eq(schema.requirements.id, requirement.id));
     expect(completedRequirement?.status).toBe('completed');
+
+    const timelineResponse = await server.inject({
+      method: 'GET',
+      url: `/api/v1/timeline?organizationId=${organizationId}&limit=20`,
+    });
+    expect(timelineResponse.statusCode).toBe(200);
+    const timeline = timelineResponse.json<{
+      events: Array<{ eventType?: string; category: string; entityVersion: number }>;
+      nextPosition: number;
+    }>();
+    expect(timeline.events).toHaveLength(5);
+    expect(timeline.events.every((event) => event.category === 'state_change')).toBe(true);
+    expect(timeline.nextPosition).toBeGreaterThan(0);
 
     await expect(
       connection.database

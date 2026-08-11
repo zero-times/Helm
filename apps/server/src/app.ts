@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import { AuditError } from '@helm/audit-events';
 import type { ServerConfig } from '@helm/config';
 import { DomainError } from '@helm/core-domain';
 import type { Database } from '@helm/database';
@@ -9,6 +10,7 @@ import Fastify, {
 import { ZodError } from 'zod';
 
 import { healthRoutes } from './routes/health';
+import { auditEventRoutes } from './routes/audit-events';
 import { memberRoutes } from './routes/members';
 import { organizationRoutes } from './routes/organizations';
 import { projectRoutes } from './routes/projects';
@@ -45,6 +47,7 @@ export function buildApp(options: BuildAppOptions) {
   void server.register(projectRoutes, { database: options.database });
   void server.register(requirementRoutes, { database: options.database });
   void server.register(workGraphRoutes, { database: options.database });
+  void server.register(auditEventRoutes, { database: options.database });
 
   server.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'Request failed');
@@ -61,6 +64,16 @@ export function buildApp(options: BuildAppOptions) {
 
     if (error instanceof DomainError) {
       void reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        requestId: request.id,
+      });
+      return;
+    }
+
+    if (error instanceof AuditError) {
+      const statusCode = error.code === 'INVALID_AUDIT_INPUT' ? 400 : 409;
+      void reply.code(statusCode).send({
         error: error.code,
         message: error.message,
         requestId: request.id,

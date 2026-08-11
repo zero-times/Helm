@@ -78,6 +78,7 @@ export const workItems = pgTable('work_items', {
     .references(() => graphNodes.id, { onDelete: 'cascade' })
     .unique(),
   status: workItemStatusEnum('status').default('pending').notNull(),
+  entityVersion: integer('entity_version').default(1).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
