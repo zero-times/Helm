@@ -1,15 +1,24 @@
 import cors from '@fastify/cors';
 import type { ServerConfig } from '@helm/config';
+import { DomainError } from '@helm/core-domain';
+import type { Database } from '@helm/database';
 import Fastify, {
   type FastifyError,
   type FastifyServerOptions,
 } from 'fastify';
+import { ZodError } from 'zod';
 
 import { healthRoutes } from './routes/health';
+import { memberRoutes } from './routes/members';
+import { organizationRoutes } from './routes/organizations';
+import { projectRoutes } from './routes/projects';
+import { requirementRoutes } from './routes/requirements';
+import { roleAssignmentRoutes } from './routes/role-assignments';
 
 export interface BuildAppOptions {
   config: Pick<ServerConfig, 'APP_VERSION' | 'WEB_ORIGIN'>;
   checkDatabase: () => Promise<void>;
+  database: Database;
   logger?: FastifyServerOptions['logger'];
 }
 
@@ -29,8 +38,34 @@ export function buildApp(options: BuildAppOptions) {
     checkDatabase: options.checkDatabase,
   });
 
+  void server.register(organizationRoutes, { database: options.database });
+  void server.register(memberRoutes, { database: options.database });
+  void server.register(roleAssignmentRoutes, { database: options.database });
+  void server.register(projectRoutes, { database: options.database });
+  void server.register(requirementRoutes, { database: options.database });
+
   server.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'Request failed');
+
+    if (error instanceof ZodError) {
+      void reply.code(400).send({
+        error: 'VALIDATION_ERROR',
+        message: 'Request validation failed',
+        details: error.issues,
+        requestId: request.id,
+      });
+      return;
+    }
+
+    if (error instanceof DomainError) {
+      void reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        requestId: request.id,
+      });
+      return;
+    }
+
     void reply.code(error.statusCode ?? 500).send({
       error: error.name,
       message:

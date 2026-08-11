@@ -1,103 +1,157 @@
-# Helm
+# HELM-4 Core Domain
 
-Helm is a TypeScript modular monolith for a human-governed workflow system. This
-repository currently contains the Phase 0 engineering foundation only: a web
-shell, an HTTP server, shared contracts and configuration, PostgreSQL access,
-repeatable Drizzle migrations, structured logs, and test baselines.
+Phase 0 implementation of the HELM organization domain model.
 
-Business pages, domain workflows, and Agent Runner behavior are intentionally
-outside this foundation.
+## Project Structure
 
-## Prerequisites
+```
+helm/
+├── apps/
+│   └── server/          # Fastify HTTP API server
+├── packages/
+│   ├── config/          # Environment configuration (zod-validated)
+│   ├── contracts/       # Shared API contracts (health, etc.)
+│   ├── core-domain/     # Pure domain logic, entities, errors, validation
+│   └── database/        # Drizzle ORM schema, migrations, client
+├── docker-compose.yml   # PostgreSQL 17 for local development
+└── vitest.*.config.ts   # Unit and integration test configs
+```
 
-- Node.js 24 or newer
-- pnpm 10
-- Docker with Docker Compose
-
-## Start locally
-
-Install dependencies once:
+## Quick Start
 
 ```bash
+# Install dependencies
 pnpm install
-```
 
-Then start PostgreSQL, apply all pending migrations, and run the API and web app
-with one command:
+# Start PostgreSQL
+pnpm infra:up
 
-```bash
-pnpm dev
-```
-
-The default local endpoints are:
-
-- Web: <http://localhost:5173>
-- API liveness: <http://localhost:3000/health/live>
-- API readiness (includes PostgreSQL): <http://localhost:3000/health/ready>
-
-Local defaults work without an `.env` file. Copy `.env.example` to `.env` only
-when you need to override them.
-
-## Workspace layout
-
-```text
-apps/
-  server/       Fastify HTTP application and structured Pino logging
-  web/          React/Vite application shell
-packages/
-  config/       Validated server environment contract
-  contracts/    Runtime-safe shared API contracts
-  database/     Drizzle schema, PostgreSQL client, and migrations
-e2e/            Playwright browser tests
-```
-
-Packages are private and export TypeScript source inside this monorepo. The web
-build bundles its dependencies with Vite; the server build bundles internal
-`@helm/*` packages into a deployable ESM artifact.
-
-## Database workflow
-
-The TypeScript schema in `packages/database/src/schema` is the source of truth.
-Generate and validate versioned SQL migrations with:
-
-```bash
-pnpm db:generate
-pnpm db:check
-```
-
-Apply pending migrations with:
-
-```bash
+# Run migrations
 pnpm db:migrate
+
+# Start dev server
+pnpm dev:apps
+
+# Run checks
+pnpm lint
+pnpm typecheck
+pnpm test:unit
+pnpm build
 ```
 
-Drizzle records applied migrations in PostgreSQL, so running the command again
-is safe. `pnpm db:migrate:twice` is used in CI to protect this guarantee.
+## Database
 
-## Quality commands
+PostgreSQL 17 with Drizzle ORM. Connection defaults to:
+`postgres://helm:helm@localhost:5432/helm`
+
+Override via `DATABASE_URL` environment variable.
+
+### Migrations
 
 ```bash
-pnpm lint              # ESLint across all workspaces
-pnpm typecheck         # strict TypeScript checks
-pnpm test:unit         # shared package unit tests
-pnpm test:integration  # in-process HTTP integration tests
-pnpm test:e2e          # Playwright web/API smoke path
-pnpm build             # production web and server builds
-pnpm check             # lint + types + unit/integration + build
+# Check schema matches migrations
+pnpm db:check
+
+# Generate new migration from schema changes
+pnpm db:generate
+
+# Apply migrations
+pnpm db:migrate
+
+# Verify idempotency
+pnpm db:migrate:twice
 ```
 
-The CI job adds a real PostgreSQL service, validates the migration journal,
-applies migrations twice, runs the full static/test/build checks, and then runs
-the Chromium E2E path.
+## Domain Model
 
-## Runtime behavior
+### Member Types
+- **Human** — a person who can be held accountable
+- **Agent** — an AI agent (cannot be accountable human)
+- **Service** — an automated service/CI pipeline
 
-- `/health/live` reports whether the server process can serve requests.
-- `/health/ready` queries PostgreSQL and returns HTTP 503 if it is unavailable.
-- Production logs are newline-delimited JSON. Development logs are formatted
-  for local reading, with authorization, cookie, password, token, and secret
-  fields redacted.
-- Shutdown signals stop HTTP intake and close the PostgreSQL pool cleanly.
+### Invariants
+- `accountableHumanId` on a Project or Requirement must reference a **Human** member in the same organization
+- `operationalOwnerId` and `assigneeMemberId` must belong to the same organization as the referenced entity
+- Requirement `goal` must be non-blank and `acceptanceCriteria` must be a non-empty JSON array of non-blank strings
+- Role assignments are unique per member-organization-role combination (a member can hold multiple different roles)
+- Project slugs are unique per organization
+- Database-level triggers enforce cross-table accountability and cross-organization checks
 
-Stop local infrastructure with `pnpm infra:down`. To deliberately delete the
-local PostgreSQL volume, run `pnpm infra:reset`.
+## API Endpoints
+
+### Organizations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/organizations` | Create organization |
+| GET | `/api/organizations` | List all organizations |
+| GET | `/api/organizations/:id` | Get organization by ID |
+
+### Members
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/members` | Create member (human/agent/service) |
+| GET | `/api/members` | List members (?organizationId=...) |
+| GET | `/api/members/:id` | Get member by ID |
+
+### Role Assignments
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/role-assignments` | Create role assignment |
+| GET | `/api/role-assignments` | List assignments (?organizationId=&memberId=) |
+| GET | `/api/role-assignments/:id` | Get assignment by ID |
+
+### Projects
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/projects` | Create project (enforces accountableHuman is Human) |
+| GET | `/api/projects` | List projects (?organizationId=...) |
+| GET | `/api/projects/:id` | Get project with responsibility view |
+
+### Requirements
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/requirements` | Create requirement |
+| GET | `/api/requirements` | List requirements (?projectId=...) |
+| GET | `/api/requirements/:id` | Get requirement with assignee details |
+| GET | `/api/requirements/by-assignee/:memberId` | Responsibility view by assignee |
+
+### Health
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health/live` | Liveness check |
+| GET | `/health/ready` | Readiness check (includes database) |
+
+## Testing
+
+```bash
+# Unit tests (pure domain logic)
+pnpm test:unit
+
+# Integration tests (requires PostgreSQL)
+DATABASE_URL=postgres://helm:helm@localhost:5432/helm pnpm test:integration
+```
+
+Integration tests require a running PostgreSQL instance. Start it with `pnpm infra:up`.
+
+## Error Handling
+
+All domain errors extend `DomainError` with machine-readable codes:
+
+| Code | HTTP Status | Description |
+|------|-------------|-------------|
+| `NOT_FOUND` | 404 | Entity not found |
+| `VALIDATION_ERROR` | 400 | Invalid input |
+| `CONFLICT` | 409 | Duplicate or conflicting state |
+| `CROSS_ORGANIZATION` | 422 | Reference to wrong organization |
+| `ACCOUNTABLE_HUMAN_REQUIRED` | 422 | Accountable must be Human |
+| `NON_EMPTY_FIELD_REQUIRED` | 400 | Required field is empty |
+
+## Environment Variables
+
+See `.env.example` for all supported variables.

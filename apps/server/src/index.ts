@@ -12,6 +12,7 @@ const server = buildApp({
   config,
   logger: createLoggerOptions(config),
   checkDatabase: () => assertDatabaseReady(connection.database),
+  database: connection.database,
 });
 
 let stopping = false;

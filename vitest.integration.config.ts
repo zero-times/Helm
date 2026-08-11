@@ -8,6 +8,7 @@ export default defineConfig({
       'apps/**/*.integration.test.ts',
       'packages/**/*.integration.test.ts',
     ],
+    fileParallelism: false,
     passWithNoTests: false,
   },
 });

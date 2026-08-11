@@ -8,6 +8,13 @@
       "when": 1786414985269,
       "tag": "0000_cooing_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786418299161,
+      "tag": "0001_wakeful_ogun",
+      "breakpoints": true
     }
   ]
 }

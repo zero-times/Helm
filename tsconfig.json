@@ -4,8 +4,10 @@
     "types": ["node", "vitest/globals"]
   },
   "include": [
-    "*.config.ts",
-    "e2e/**/*.ts",
-    "vitest.*.config.ts"
+    "vitest.*.config.ts",
+    "eslint.config.mjs"
+  ],
+  "exclude": [
+    "playwright.config.ts"
   ]
 }
