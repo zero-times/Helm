@@ -14,6 +14,7 @@ import { organizationRoutes } from './routes/organizations';
 import { projectRoutes } from './routes/projects';
 import { requirementRoutes } from './routes/requirements';
 import { roleAssignmentRoutes } from './routes/role-assignments';
+import { workGraphRoutes } from './routes/work-graphs';
 
 export interface BuildAppOptions {
   config: Pick<ServerConfig, 'APP_VERSION' | 'WEB_ORIGIN'>;
@@ -43,6 +44,7 @@ export function buildApp(options: BuildAppOptions) {
   void server.register(roleAssignmentRoutes, { database: options.database });
   void server.register(projectRoutes, { database: options.database });
   void server.register(requirementRoutes, { database: options.database });
+  void server.register(workGraphRoutes, { database: options.database });
 
   server.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, 'Request failed');

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   jsonb,
+  pgEnum,
   pgTable,
   text,
   timestamp,
@@ -9,6 +10,14 @@ import {
 
 import { members } from './member';
 import { projects } from './project';
+
+export const requirementStatusEnum = pgEnum('requirement_status', [
+  'planned',
+  'in_progress',
+  'blocked',
+  'completed',
+  'canceled',
+]);
 
 export const requirements = pgTable('requirements', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -28,6 +37,7 @@ export const requirements = pgTable('requirements', {
   assigneeMemberId: uuid('assignee_member_id')
     .notNull()
     .references(() => members.id, { onDelete: 'restrict' }),
+  status: requirementStatusEnum('status').default('planned').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

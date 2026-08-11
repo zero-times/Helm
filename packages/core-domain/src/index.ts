@@ -3,7 +3,9 @@ export {
   AccountableHumanRequiredError,
   ConflictError,
   CrossOrganizationError,
+  DependencyNotSatisfiedError,
   DomainError,
+  InvalidStateTransitionError,
   NonEmptyFieldRequiredError,
   NotFoundError,
   ValidationError,
@@ -35,3 +37,13 @@ export {
   validateCreateRequirement,
   validateCreateRoleAssignment,
 } from './validation';
+
+export {
+  RequirementStatus,
+  WorkItemStatus,
+  assertWorkItemTransition,
+  deriveRequirementStatus,
+  type GraphNodeState,
+  type RequirementStatus as RequirementStatusValue,
+  type WorkItemStatus as WorkItemStatusValue,
+} from './work-graph';

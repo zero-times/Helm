@@ -15,6 +15,13 @@
       "when": 1786418299161,
       "tag": "0001_wakeful_ogun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786420196519,
+      "tag": "0002_dizzy_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }

@@ -40,6 +40,24 @@ export class ConflictError extends DomainError {
   }
 }
 
+export class InvalidStateTransitionError extends DomainError {
+  readonly code = 'INVALID_STATE_TRANSITION';
+  readonly statusCode = 409;
+
+  constructor(from: string, to: string) {
+    super(`Work item cannot transition from ${from} to ${to}`);
+  }
+}
+
+export class DependencyNotSatisfiedError extends DomainError {
+  readonly code = 'DEPENDENCY_NOT_SATISFIED';
+  readonly statusCode = 409;
+
+  constructor() {
+    super('All hard dependencies must be completed before a work item becomes ready');
+  }
+}
+
 export class CrossOrganizationError extends DomainError {
   readonly code = 'CROSS_ORGANIZATION';
   readonly statusCode = 422;

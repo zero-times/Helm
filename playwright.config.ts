@@ -6,7 +6,8 @@ const serverEnvironment = {
   HOST: '127.0.0.1',
   PORT: '3100',
   LOG_LEVEL: 'silent',
-  DATABASE_URL: 'postgres://helm:helm@127.0.0.1:5432/helm',
+  DATABASE_URL:
+    process.env.DATABASE_URL ?? 'postgres://helm:helm@127.0.0.1:5432/helm',
   WEB_ORIGIN: 'http://127.0.0.1:4173',
 };
 

@@ -5,6 +5,8 @@
  * They are independent of any persistence or transport layer.
  */
 
+import type { RequirementStatus } from './work-graph';
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export const MemberType = {
@@ -79,6 +81,8 @@ export interface Requirement {
   operationalOwnerId: string;
   /** Must belong to the same organization as the parent project. */
   assigneeMemberId: string;
+  /** Derived from required work items; callers cannot set it directly. */
+  status: RequirementStatus;
   createdAt: Date;
   updatedAt: Date;
 }
